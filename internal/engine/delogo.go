@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/events"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 type DelogoOptions struct {

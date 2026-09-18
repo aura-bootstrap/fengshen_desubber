@@ -16,7 +16,7 @@ type dockerRunner struct {
 func (d *dockerRunner) Run(ctx context.Context, tk *store.Task, events chan<- Event) error {
 	o := runner.DockerOptions{
 		Lab:  d.lab,
-		Repo: envOr("DESUB_REPO", `W:\github.com\aura-bootstrap\fengshen-subtitle-remover`),
+		Repo: envOr("DESUB_REPO", `W:\github.com\aura-bootstrap\fengshen_desubber`),
 		Bin:  envOr("DESUB_BIN", "/src/bin/desub-lx-v6"),
 		GPUs: envOr("DESUB_GPUS", "all"),
 	}

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/events"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ocr"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ocr"
 )
 
 func ev(startF, endF int, box imgx.Rect) events.Event {

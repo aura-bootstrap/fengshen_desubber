@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/motion"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/motion"
 )
 
 func transH(dx, dy float64) [9]float64 {

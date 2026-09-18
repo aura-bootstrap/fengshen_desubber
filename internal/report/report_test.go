@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/manifest"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/manifest"
 )
 
 func TestTimecode(t *testing.T) {

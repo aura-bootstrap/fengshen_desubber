@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 func TestDetectFramesRoundTrip(t *testing.T) {

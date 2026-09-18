@@ -9,10 +9,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/detect"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/pipeline"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/subs"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/detect"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/pipeline"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/subs"
 )
 
 const version = "0.1.0"

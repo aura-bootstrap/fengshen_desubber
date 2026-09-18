@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/manifest"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/manifest"
 )
 
 // DefaultCoverage is the true-pixel coverage below which an event is flagged

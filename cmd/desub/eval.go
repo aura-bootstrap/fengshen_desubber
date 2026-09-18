@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/detect"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/eval"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/pipeline"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/detect"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/eval"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/pipeline"
 )
 
 // cmdSynth burns programmatic subtitles into a clean source with an exact GT

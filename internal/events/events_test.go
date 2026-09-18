@@ -3,7 +3,7 @@ package events
 import (
 	"testing"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 func r(x, y, w, h int) imgx.Rect { return imgx.Rect{X: x, Y: y, W: w, H: h} }

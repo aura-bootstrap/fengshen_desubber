@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/manifest"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/report"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/manifest"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/report"
 )
 
 // cmdRisk prints the high-risk segment list from a run manifest (R6): JSON by

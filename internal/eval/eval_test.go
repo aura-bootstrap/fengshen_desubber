@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 func TestPSNRKnownValues(t *testing.T) {

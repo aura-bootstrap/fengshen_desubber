@@ -18,8 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/engine"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/engine"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 // Client implements engine.Painter against the sidecar script.

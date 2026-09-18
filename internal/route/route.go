@@ -5,10 +5,10 @@
 package route
 
 import (
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/events"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/mask"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/subs"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/subs"
 )
 
 // Tier is the difficulty grade of one subtitle event (roadmap T0–T5).

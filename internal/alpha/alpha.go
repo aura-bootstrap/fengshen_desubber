@@ -8,7 +8,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 // Bar is one detected backdrop bar in band coordinates.

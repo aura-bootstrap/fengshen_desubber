@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/engine"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/events"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/manifest"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/propainter"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/route"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/engine"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/manifest"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/propainter"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/route"
 )
 
 // cmdRerun re-repairs one manifest segment and splices it back into the

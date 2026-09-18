@@ -3,10 +3,10 @@ package route
 import (
 	"testing"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/events"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/mask"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/subs"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/subs"
 )
 
 func TestClassifyBoundaries(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 // Box is one OCR detection in band coordinates.

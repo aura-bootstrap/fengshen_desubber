@@ -11,12 +11,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/detect"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/events"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/mask"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/subs"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/detect"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/subs"
 )
 
 // Cue is one subtitle line burned over [Start, End] seconds.

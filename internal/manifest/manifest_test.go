@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/mask"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
 )
 
 func testManifest(t *testing.T, dir string) (*Manifest, string) {

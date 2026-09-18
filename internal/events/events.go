@@ -3,7 +3,7 @@
 // splits at scene cuts.
 package events
 
-import "github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+import "github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 
 type Frame struct {
 	Boxes []imgx.Rect

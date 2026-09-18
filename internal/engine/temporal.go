@@ -9,12 +9,12 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/alpha"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/ffx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/grain"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/mask"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/motion"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/alpha"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/grain"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/motion"
 )
 
 // debugBand writes band frames to $DESUB_DBG frames lo..hi as PNGs (quality

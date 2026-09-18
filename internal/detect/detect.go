@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 )
 
 type Params struct {
