@@ -141,12 +141,32 @@ def main():
         fail(f"inference produced {len(produced)} frames, want {n}")
 
     os.makedirs(args.out, exist_ok=True)
+    # Feathered composite (R5.7): a hard paste of the whole crop rectangle
+    # leaves a visible box seam (the model shifts color/texture even outside
+    # the mask). Blend model output through the mask blurred by FEATHER px so
+    # only inpainted strokes (plus a soft rim) change; context stays pristine.
+    feather = float(os.environ.get("PROPAINTER_FEATHER", "6"))
+    dbg = os.environ.get("PROPAINTER_DEBUG_DIR", "")
+    if dbg:
+        os.makedirs(dbg, exist_ok=True)
     for k in range(real_n):
         sub = load_frame(os.path.join(frames_dir, produced[k]))
         out = frames[k].copy()
         sh = sub.shape[0]
-        out[y0:y0 + sh, :] = sub
+        a = masks[k][y0:y0 + sh, :].astype(np.float32) / 255.0
+        if feather > 0:
+            a = cv2.GaussianBlur(a, (0, 0), feather / 2.0)
+            peak = a.max()
+            if peak > 0:
+                a = a / peak  # keep stroke cores at full alpha after blur
+        a = np.clip(a, 0.0, 1.0)[..., None]
+        orig = frames[k][y0:y0 + sh, :].astype(np.float32)
+        out[y0:y0 + sh, :] = (orig * (1.0 - a) + sub.astype(np.float32) * a).astype(np.uint8)
         cv2.imwrite(os.path.join(args.out, "%05d.png" % (args.start + k)), out)
+        if dbg and k == 0:
+            cv2.imwrite(os.path.join(dbg, "mask_%05d.png" % (args.start + k)), masks[k])
+            cv2.imwrite(os.path.join(dbg, "alpha_%05d.png" % (args.start + k)), (a[..., 0] * 255).astype(np.uint8))
+            cv2.imwrite(os.path.join(dbg, "model_%05d.png" % (args.start + k)), sub)
 
 
 if __name__ == "__main__":

@@ -39,10 +39,13 @@ type Detection struct {
 
 // Plan is everything the fill engines need: the events (already closed over
 // detection gaps), the per-frame repair masks (event-wide unions, clipped to
-// each event's rows), and the shot id per frame.
+// each event's rows), and the shot id per frame. RawMasks carries the same
+// event-wide unions of the pre-dilation stroke masks, for consumers that
+// composite generative output and want the painted area tight.
 type Plan struct {
 	Events    []events.Event
 	Masks     []mask.Frame
+	RawMasks  []mask.Frame
 	Frames    []events.Frame
 	Detection Detection
 	Band      Band
@@ -215,6 +218,32 @@ func makeMasksEventWide(masks []mask.Frame, evs []events.Event) {
 	}
 }
 
+// gateEdgeFrames zeroes the mask on frames that padEvents added beyond the
+// detected (core) span when the raw per-frame detection saw no text there.
+// Painting such frames re-draws already-clean pixels and leaves a visible
+// smudge that pops back to the untouched frame at the event boundary; the
+// core span keeps the union so mid-event detection gaps stay covered.
+func gateEdgeFrames(masks []mask.Frame, evs, core []events.Event, rawText []bool) {
+	for k, ev := range evs {
+		if k >= len(core) {
+			break
+		}
+		c := core[k]
+		end := ev.EndF
+		if end >= len(masks) {
+			end = len(masks) - 1
+		}
+		for f := ev.StartF; f <= end; f++ {
+			if f >= c.StartF && f <= c.EndF {
+				continue
+			}
+			if f < len(rawText) && !rawText[f] {
+				masks[f] = mask.Frame{}
+			}
+		}
+	}
+}
+
 // limitMasks keeps each frame's mask only within its event's repair band, so
 // prop/label text detected elsewhere in the band is never touched.
 func limitMasks(masks []mask.Frame, evs []events.Event, pad, bandH int) {
@@ -245,12 +274,13 @@ func EventBoxAt(evs []events.Event, f int) *imgx.Rect {
 
 // Measure runs the detector over the band of input with a small worker
 // pool (detection is per-frame independent). frames is always returned;
-// masks only when storeMasks is set.
-func Measure(input string, w int, b Band, params detect.Params, storeMasks bool, dumpDir string, dumpLimit, dumpStride int) ([]events.Frame, []mask.Frame, Detection, error) {
+// masks (dilated, for the motion tier) and rawMasks (stroke-level, for the
+// generative tier's compositing) only when storeMasks is set.
+func Measure(input string, w int, b Band, params detect.Params, storeMasks bool, dumpDir string, dumpLimit, dumpStride int) ([]events.Frame, []mask.Frame, []mask.Frame, Detection, error) {
 	var det Detection
 	fr, err := ffx.NewFrameReader(input, fmt.Sprintf("crop=%d:%d:0:%d,format=gray", w, b.H, b.Y), w, b.H, "gray")
 	if err != nil {
-		return nil, nil, det, err
+		return nil, nil, nil, det, err
 	}
 	defer fr.Close()
 	if dumpStride < 1 {
@@ -265,6 +295,7 @@ func Measure(input string, w int, b Band, params detect.Params, storeMasks bool,
 		idx     int
 		boxes   []imgx.Rect
 		mf      mask.Frame
+		rf      mask.Frame
 		textPix int
 	}
 	workers := ffx.CPUWorkers()
@@ -285,6 +316,7 @@ func Measure(input string, w int, b Band, params detect.Params, storeMasks bool,
 				o := detOut{idx: j.idx, boxes: res.Boxes, textPix: res.TextPix}
 				if storeMasks {
 					o.mf = mask.Encode(res.Mask, w, b.H)
+					o.rf = mask.Encode(res.Raw, w, b.H)
 				}
 				if dumpDir != "" && len(res.Boxes) > 0 && j.idx%dumpStride == 0 && int(dumped.Load()) < dumpLimit {
 					if dumped.Add(1) <= int32(dumpLimit) {
@@ -327,19 +359,21 @@ func Measure(input string, w int, b Band, params detect.Params, storeMasks bool,
 		results = append(results, o)
 	}
 	if err := <-readErr; err != nil {
-		return nil, nil, det, err
+		return nil, nil, nil, det, err
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].idx < results[j].idx })
 
 	frames := make([]events.Frame, 0, len(results))
-	var masks []mask.Frame
+	var masks, rawMasks []mask.Frame
 	if storeMasks {
 		masks = make([]mask.Frame, 0, len(results))
+		rawMasks = make([]mask.Frame, 0, len(results))
 	}
 	for _, o := range results {
 		frames = append(frames, events.Frame{Boxes: o.boxes})
 		if storeMasks {
 			masks = append(masks, o.mf)
+			rawMasks = append(rawMasks, o.rf)
 		}
 		det.Frames++
 		if len(o.boxes) > 0 {
@@ -348,7 +382,7 @@ func Measure(input string, w int, b Band, params detect.Params, storeMasks bool,
 			det.TextPix += o.textPix
 		}
 	}
-	return frames, masks, det, nil
+	return frames, masks, rawMasks, det, nil
 }
 
 // extractBandFrames pulls many band frames in ONE ffmpeg pass: select emits
@@ -433,9 +467,10 @@ type addBox struct {
 // fuseOCR merges OCR sidecar detections into the per-frame boxes (union with
 // the classical boxes) and, when masks are stored, into the repair masks.
 // Boxes that substantially overlap a classical box add nothing; the rest are
-// stroke-refined on a re-extracted band frame, falling back to the bare rect
-// when no strokes validate inside. Returns the number of boxes added.
-func fuseOCR(o Options, frames []events.Frame, masks []mask.Frame) int {
+// stroke-refined on a re-extracted band frame. A box whose strokes cannot be
+// validated keeps its frame box (for event aggregation) but is not painted.
+// Returns the number of boxes added.
+func fuseOCR(o Options, frames []events.Frame, masks, rawMasks []mask.Frame) int {
 	stride := o.OCRStride
 	if stride < 1 {
 		stride = 12
@@ -537,55 +572,61 @@ func fuseOCR(o Options, frames []events.Frame, masks []mask.Frame) int {
 			}
 			frames[f].Boxes = append(frames[f].Boxes, ob.Rect)
 			added++
-			if masks != nil {
+			if masks != nil || rawMasks != nil {
 				adds = append(adds, addBox{frame: f, rect: ob.Rect})
 				needGray[f] = true
 			}
 		}
 	}
-	if masks == nil || len(adds) == 0 {
+	if (masks == nil && rawMasks == nil) || len(adds) == 0 {
 		return added
 	}
 	// Batch-extract every frame that needs stroke refinement in one ffmpeg
-	// pass; anything missing falls back to the bare rect below.
+	// pass. Boxes whose strokes cannot be validated are left unpainted: a
+	// bare rect repaints mostly background, and the event-wide union would
+	// smear that patch over every frame (the visible "blob" artifact).
 	var fs []int
 	for f := range needGray {
 		fs = append(fs, f)
 	}
 	grayCache, gerr := extractBandFrames(o.Input, fs, o.W, o.Band)
 	if gerr != nil {
-		logf(o.Log, "warn: ocr refine: batch extract failed, using bare rects: %v\n", gerr)
+		logf(o.Log, "warn: ocr refine: batch extract failed, fused boxes left unpainted: %v\n", gerr)
 		grayCache = nil
 	}
+	skipped := 0
 	for _, a := range adds {
-		bits := make([]uint8, o.W*o.Band.H)
-		masks[a.frame].Decode(bits, o.W)
-		if gray := grayCache[a.frame]; gray != nil {
-			if ref := refineOCRBox(gray, o.W, o.Band, a.rect, o.Params); ref != nil {
-				for i, v := range ref {
-					bits[i] |= v
-				}
-			} else {
-				rasterizeRect(bits, o.W, o.Band.H, a.rect)
-			}
-		} else {
-			rasterizeRect(bits, o.W, o.Band.H, a.rect)
+		gray := grayCache[a.frame]
+		if gray == nil {
+			skipped++
+			continue
 		}
-		masks[a.frame] = mask.Encode(bits, o.W, o.Band.H)
+		ref := refineOCRBox(gray, o.W, o.Band, a.rect, o.Params)
+		if ref == nil {
+			skipped++
+			continue
+		}
+		if masks != nil {
+			bits := make([]uint8, o.W*o.Band.H)
+			masks[a.frame].Decode(bits, o.W)
+			for i, v := range ref {
+				bits[i] |= v
+			}
+			masks[a.frame] = mask.Encode(bits, o.W, o.Band.H)
+		}
+		if rawMasks != nil {
+			bits := make([]uint8, o.W*o.Band.H)
+			rawMasks[a.frame].Decode(bits, o.W)
+			for i, v := range ref {
+				bits[i] |= v
+			}
+			rawMasks[a.frame] = mask.Encode(bits, o.W, o.Band.H)
+		}
+	}
+	if skipped > 0 {
+		logf(o.Log, "ocr: %d fused box(es) left unpainted (no strokes validated)\n", skipped)
 	}
 	return added
-}
-
-func rasterizeRect(bits []uint8, w, h int, r imgx.Rect) {
-	x0 := max(0, r.X)
-	y0 := max(0, r.Y)
-	x1 := min(w, r.X+r.W)
-	y1 := min(h, r.Y+r.H)
-	for y := y0; y < y1; y++ {
-		for x := x0; x < x1; x++ {
-			bits[y*w+x] = 1
-		}
-	}
 }
 
 func logf(w io.Writer, format string, args ...any) {
@@ -697,20 +738,20 @@ func Build(o Options) (*Plan, error) {
 	if o.CloseOverlap <= 0 {
 		o.CloseOverlap = 0.5
 	}
-	frames, masks, det, err := Measure(o.Input, o.W, o.Band, o.Params, true, o.DumpDir, o.DumpLimit, o.DumpStride)
+	frames, masks, rawMasks, det, err := Measure(o.Input, o.W, o.Band, o.Params, true, o.DumpDir, o.DumpLimit, o.DumpStride)
 	if err != nil {
 		return nil, err
 	}
 	if np, ok := calibrateParams(frames, o.Params); ok {
 		logf(o.Log, "detect: charH recalibrated %d -> %d; re-running detection\n", o.Params.CharH, np.CharH)
 		o.Params = np
-		frames, masks, det, err = Measure(o.Input, o.W, o.Band, o.Params, true, o.DumpDir, o.DumpLimit, o.DumpStride)
+		frames, masks, rawMasks, det, err = Measure(o.Input, o.W, o.Band, o.Params, true, o.DumpDir, o.DumpLimit, o.DumpStride)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if o.OCR != nil {
-		if n := fuseOCR(o, frames, masks); n > 0 {
+		if n := fuseOCR(o, frames, masks, rawMasks); n > 0 {
 			logf(o.Log, "ocr: fused %d box(es) the classical detector missed\n", n)
 			det.Boxes += n
 		}
@@ -724,8 +765,12 @@ func Build(o Options) (*Plan, error) {
 		makeMasksEventWide(masks, evs)
 		limitMasks(masks, evs, o.Params.MaskDilate*2, o.Band.H)
 	}
+	if len(rawMasks) == total {
+		makeMasksEventWide(rawMasks, evs)
+		limitMasks(rawMasks, evs, o.Params.MaskDilate*2, o.Band.H)
+	}
 	return &Plan{
-		Events: evs, Masks: masks, Frames: frames, Detection: det,
+		Events: evs, Masks: masks, RawMasks: rawMasks, Frames: frames, Detection: det,
 		Band: o.Band, Params: o.Params, Cuts: o.Cuts, FPS: o.FPS, ShotID: shotID,
 	}, nil
 }

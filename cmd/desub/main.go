@@ -219,6 +219,7 @@ func cmdRemove(args []string) error {
 	painterScript := fs.String("propainter-script", "scripts/propainter_infer.py", "path to the ProPainter sidecar script")
 	painterHome := fs.String("propainter-home", "", "PROPAINTER_HOME checkout dir for the sidecar (empty: inherit env)")
 	ppMaskDilation := fs.Int("pp-mask-dilation", 8, "ProPainter mask dilation px (validated: 8 removes stroke-halo bleed)")
+	ppTightDilate := fs.Int("pp-tight-dilate", 4, "dilation px applied to stroke-level composite masks exported for ProPainter (covers glyph anti-aliasing and dark outline)")
 	ppRaftIter := fs.Int("pp-raft-iter", 32, "ProPainter RAFT iterations (validated: 32)")
 	ppNeighbor := fs.Int("pp-neighbor-length", 20, "ProPainter local neighbor length (validated: 20)")
 	ppConcurrency := fs.Int("pp-concurrency", 1, "concurrent ProPainter chunk sidecars (GPU-bound; K=2 measured slower on 16GB cards)")
@@ -262,7 +263,8 @@ func cmdRemove(args []string) error {
 		Alpha:      *alphaOn,
 		ProPainter: *painterOn, PainterScript: *painterScript,
 		PainterHome: *painterHome, PainterMaskDilation: *ppMaskDilation,
-		PainterRaftIter: *ppRaftIter, PainterNeighborLength: *ppNeighbor,
+		PainterTightDilate: *ppTightDilate,
+		PainterRaftIter:    *ppRaftIter, PainterNeighborLength: *ppNeighbor,
 		PainterConcurrency: *ppConcurrency,
 		Grain:              *grainOn, ForceEngine: *forceEngine, ManifestPath: *manifestOut,
 		VLMQC: *vlmQC, VLMScript: *vlmScript, VLMEndpoint: *vlmEndpoint, VLMModel: *vlmModel, VLMAPIKey: *vlmAPIKey,
@@ -297,7 +299,7 @@ func cmdVerify(args []string) error {
 	}
 	b := pipeline.ComputeBand(info.H, *bandFrac)
 	params := detect.DefaultParams(info.H)
-	_, _, det, err := subs.Measure(input, info.W, b, params, false, "", 0, 1)
+	_, _, _, det, err := subs.Measure(input, info.W, b, params, false, "", 0, 1)
 	if err != nil {
 		return err
 	}

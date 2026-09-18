@@ -17,10 +17,10 @@ set -euo pipefail
 
 IMAGE="${DESUB_IMAGE:-desub:cu124}"
 LAB="${DESUB_LAB:-W:/QoderCN/desub-lab}"
-REPO="${DESUB_REPO:-W:/github.com/aura-bootstrap/fengshen-subtitle-remover}"
+REPO="${DESUB_REPO:-W:/github.com/aura-bootstrap/fengshen_desubber}"
 PROXY="${DESUB_PROXY:-http://host.docker.internal:7897}"
 PP_HOME="${PROPAINTER_HOME:-/work/vendor/ProPainter}"
-BIN="${DESUB_BIN:-/src/bin/desub-linux-amd64}"
+BIN="${DESUB_BIN:-/src/bin/desub-lx-v6}"
 gpu_args=()
 if [ -n "${DESUB_GPUS:-}" ]; then gpu_args+=(--gpus "$DESUB_GPUS"); fi
 
@@ -57,7 +57,7 @@ case "${1:-}" in
 esac
 
 wanvace_env=()
-for v in WANVACE_OFFLOAD WANVACE_T5_CPU WANVACE_SIZE WANVACE_FRAME_NUM WANVACE_STEPS WANVACE_TASK PYTORCH_CUDA_ALLOC_CONF; do
+for v in WANVACE_OFFLOAD WANVACE_T5_CPU WANVACE_SIZE WANVACE_FRAME_NUM WANVACE_STEPS WANVACE_TASK PYTORCH_CUDA_ALLOC_CONF PROPAINTER_FEATHER PROPAINTER_DEBUG_DIR; do
   if [ -n "${!v:-}" ]; then wanvace_env+=(-e "$v=${!v}"); fi
 done
 

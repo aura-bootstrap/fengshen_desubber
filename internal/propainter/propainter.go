@@ -39,6 +39,10 @@ type Client struct {
 	MaskDilation   int    // PROPAINTER_MASK_DILATION (0: model default 4)
 	RaftIter       int    // PROPAINTER_RAFT_ITER (0: model default 20)
 	NeighborLength int    // PROPAINTER_NEIGHBOR_LENGTH (0: model default 10)
+	// TightDilate is the dilation (px) applied to stroke-level composite
+	// masks at export, covering glyph anti-aliasing and the dark subtitle
+	// outline around accepted cores (0: default 4).
+	TightDilate int
 }
 
 // NewClient checks the sidecar script exists and returns a client with the
@@ -145,7 +149,7 @@ func (c *Client) Inpaint(j engine.PaintJob) ([][]byte, error) {
 	if err := exportStrip(j, stripDir); err != nil {
 		return nil, err
 	}
-	if err := exportMasks(j, maskDir); err != nil {
+	if err := exportMasks(j, maskDir, c.TightDilate); err != nil {
 		return nil, err
 	}
 
@@ -301,13 +305,32 @@ func exportStrip(j engine.PaintJob, dir string) error {
 }
 
 // exportMasks writes each frame's repair mask as a single-channel PNG
-// (255 = to be inpainted), dilated one pixel so the model covers stroke
-// anti-aliasing that the binary mask edges miss.
-func exportMasks(j engine.PaintJob, dir string) error {
+// (255 = to be inpainted). When the job carries stroke-level RawMasks they
+// are exported instead of the dilated motion-tier masks: the sidecar
+// composites model output through these masks, and a tight mask limits the
+// painted patch to actual glyph pixels (ProPainter still sees a wider mask
+// via its own --mask_dilation, so inference coverage is unchanged).
+// tightDilate grows the tight mask just enough to cover glyph
+// anti-aliasing and the dark subtitle outline (0: default 4px).
+func exportMasks(j engine.PaintJob, dir string, tightDilate int) error {
 	w, h := j.W, j.BandH
+	src := j.Masks
+	tight := len(j.RawMasks) == len(j.Masks) && len(j.RawMasks) > 0
+	if tight {
+		src = j.RawMasks
+	}
+	if tightDilate <= 0 {
+		tightDilate = 4
+	}
+	k := tightDilate*2 + 1
 	bits := make([]uint8, w*h)
-	for i, m := range j.Masks {
+	dil := make([]uint8, w*h)
+	for i, m := range src {
 		m.Decode(bits, w)
+		if tight {
+			imgx.MorphBin(bits, dil, w, h, k, k, true)
+			bits, dil = dil, bits
+		}
 		img := image.NewGray(image.Rect(0, 0, w, h))
 		for p, b := range bits {
 			if b != 0 {

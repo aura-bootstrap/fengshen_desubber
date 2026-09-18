@@ -4,25 +4,26 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/events"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/mask"
-	"github.com/aura-bootstrap/fengshen-subtitle-remover/internal/route"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/route"
 )
 
 // PaintJob describes one event's generative-tier repair: the frame range
 // [StartF, EndF] of the band plus its repair masks. Shot cuts inside the
 // range force chunk splits in the sidecar.
 type PaintJob struct {
-	Input   string
-	W       int
-	BandY   int
-	BandH   int
-	FPS     float64
-	StartF  int
-	EndF    int
-	Masks   []mask.Frame // one per frame in [StartF, EndF], band coords
-	Cuts    []float64    // cut times (seconds) inside the range
-	WorkDir string       // scratch space for the lossless intermediate
+	Input    string
+	W        int
+	BandY    int
+	BandH    int
+	FPS      float64
+	StartF   int
+	EndF     int
+	Masks    []mask.Frame // one per frame in [StartF, EndF], band coords
+	RawMasks []mask.Frame // stroke-level twins of Masks; empty: use Masks
+	Cuts     []float64    // cut times (seconds) inside the range
+	WorkDir  string       // scratch space for the lossless intermediate
 }
 
 // Painter is the generative fill tier (implemented by
@@ -40,7 +41,8 @@ type FillOptions struct {
 	TemporalOptions
 	Events    []events.Event
 	Decisions []route.Decision
-	Painter   Painter // nil: propainter decisions fall back to motion
+	Painter   Painter      // nil: propainter decisions fall back to motion
+	RawMasks  []mask.Frame // stroke-level masks for Painter compositing; empty: Painter gets Masks
 	WorkDir   string
 	Log       io.Writer // fallback reasons land here (R5.6)
 }
@@ -127,10 +129,14 @@ func framePainted(o FillOptions) (map[int][]byte, []int, error) {
 				cuts = append(cuts, c)
 			}
 		}
+		var raw []mask.Frame
+		if len(o.RawMasks) > end {
+			raw = o.RawMasks[ev.StartF : end+1]
+		}
 		frames, err := o.Painter.Inpaint(PaintJob{
 			Input: o.Input, W: o.W, BandY: o.BandY, BandH: o.BandH,
 			FPS: o.FPS, StartF: ev.StartF, EndF: end,
-			Masks: o.Masks[ev.StartF : end+1], Cuts: cuts, WorkDir: o.WorkDir,
+			Masks: o.Masks[ev.StartF : end+1], RawMasks: raw, Cuts: cuts, WorkDir: o.WorkDir,
 		})
 		if err != nil || len(frames) != end-ev.StartF+1 {
 			if err != nil {

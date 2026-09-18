@@ -387,13 +387,13 @@ func luma(r, g, b byte) uint8 {
 // pipeline applies in subs.Build, so eval metrics see the detector the
 // repair actually used. The final params are returned along with the pass.
 func measureCalibrated(input string, info *ffx.MediaInfo, band subs.Band, params detect.Params, storeMasks bool) ([]events.Frame, []mask.Frame, detect.Params, error) {
-	frames, masks, _, err := subs.Measure(input, info.W, band, params, storeMasks, "", 0, 1)
+	frames, masks, _, _, err := subs.Measure(input, info.W, band, params, storeMasks, "", 0, 1)
 	if err != nil {
 		return nil, nil, params, err
 	}
 	if np, ok := subs.CalibrateParams(frames, params); ok {
 		params = np
-		frames, masks, _, err = subs.Measure(input, info.W, band, np, storeMasks, "", 0, 1)
+		frames, masks, _, _, err = subs.Measure(input, info.W, band, np, storeMasks, "", 0, 1)
 		if err != nil {
 			return nil, nil, params, err
 		}

@@ -51,6 +51,7 @@ type Options struct {
 	PainterScript         string
 	PainterHome           string // PROPAINTER_HOME for the sidecar (empty: inherit env)
 	PainterMaskDilation   int    // 0: model default 4
+	PainterTightDilate    int    // dilation of stroke-level composite masks; 0: propainter.Client default
 	PainterRaftIter       int    // 0: model default 20
 	PainterNeighborLength int    // 0: model default 10
 	PainterConcurrency    int    // 0: default 2 concurrent chunk sidecars
@@ -287,6 +288,7 @@ func Run(o Options) (*Report, error) {
 				} else {
 					cl.Home = o.PainterHome
 					cl.MaskDilation = o.PainterMaskDilation
+					cl.TightDilate = o.PainterTightDilate
 					cl.RaftIter = o.PainterRaftIter
 					cl.NeighborLength = o.PainterNeighborLength
 					cl.Concurrency = o.PainterConcurrency
@@ -301,6 +303,7 @@ func Run(o Options) (*Report, error) {
 				Events:          evs,
 				Decisions:       rep.Routing,
 				Painter:         painter,
+				RawMasks:        plan.RawMasks,
 				Log:             o.Log,
 			})
 			fmt.Fprintln(o.Log)
@@ -348,7 +351,7 @@ func Run(o Options) (*Report, error) {
 
 	if o.Verify && o.Output != "" {
 		t0 = time.Now()
-		outFrames, _, res, err := subs.Measure(o.Output, info.W, b, params, false, "", 0, 1)
+		outFrames, _, _, res, err := subs.Measure(o.Output, info.W, b, params, false, "", 0, 1)
 		if err != nil {
 			return nil, err
 		}

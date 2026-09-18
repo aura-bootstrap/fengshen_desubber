@@ -59,6 +59,7 @@ func DefaultParams(frameH int) Params {
 type Result struct {
 	Boxes   []imgx.Rect
 	Mask    []uint8 // 0/1, dilated, band coordinates
+	Raw     []uint8 // 0/1, accepted strokes before dilation (nil when empty run)
 	TextPix int
 	Comps   int
 }
@@ -192,7 +193,7 @@ func Detect(band []uint8, w, h int, p Params) Result {
 	for _, l := range lines {
 		boxes = append(boxes, l.box)
 	}
-	return Result{Boxes: boxes, Mask: mask, TextPix: textPix, Comps: len(kept)}
+	return Result{Boxes: boxes, Mask: mask, Raw: keep, TextPix: textPix, Comps: len(kept)}
 }
 
 // groupLines merges components into text lines. A component joins a line

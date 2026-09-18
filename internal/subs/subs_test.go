@@ -161,7 +161,7 @@ func TestFuseOCRUnionAndDedup(t *testing.T) {
 		}}, nil
 	})
 	o := Options{Input: "/in.mp4", W: 720, Band: Band{Y: 742, H: 538}, OCR: stub, OCRStride: 12}
-	added := fuseOCR(o, frames, nil)
+	added := fuseOCR(o, frames, nil, nil)
 	if added != 1 {
 		t.Fatalf("added = %d, want 1", added)
 	}
@@ -180,7 +180,7 @@ func TestFuseOCRDegradesOnError(t *testing.T) {
 		return ocr.Response{}, errors.New("exit status 2")
 	})
 	o := Options{Input: "/in.mp4", W: 720, Band: Band{Y: 742, H: 538}, OCR: stub, OCRStride: 1}
-	if added := fuseOCR(o, frames, nil); added != 0 {
+	if added := fuseOCR(o, frames, nil, nil); added != 0 {
 		t.Fatalf("added = %d, want 0 on sidecar failure", added)
 	}
 }
