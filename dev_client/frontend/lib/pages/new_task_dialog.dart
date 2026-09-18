@@ -28,7 +28,9 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   bool propainter = true;
   bool grain = true;
   bool ocr = true;
-  String forceEngine = '';
+  // 引擎路由只留 propainter:自动路由会把慢动事件分进 motion 档留残影,
+  // 质量优先于耗时,固定强制 ProPainter(对齐 slice1-pp-grain tag 参数)
+  static const forceEngine = 'propainter';
   bool runNow = true;
   bool busy = false;
 
@@ -142,17 +144,8 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                const Text('引擎路由', style: TextStyle(fontSize: 13)),
-                const SizedBox(width: 8),
-                DropdownButton<String>(
-                  value: forceEngine,
-                  items: const [
-                    DropdownMenuItem(value: '', child: Text('自动')),
-                    DropdownMenuItem(value: 'motion', child: Text('运动层')),
-                    DropdownMenuItem(value: 'propainter', child: Text('ProPainter')),
-                  ],
-                  onChanged: (v) => setState(() => forceEngine = v ?? ''),
-                ),
+                Text('引擎: ProPainter(强制)',
+                    style: TextStyle(fontSize: 13, color: t.dim)),
               ],
             ),
             const SizedBox(height: 8),
