@@ -180,26 +180,45 @@ def main():
     if len(produced) < n:
         fail(f"result has {len(produced)} frames, want {n}")
 
-    # Feathered composite (same as propainter sidecar): only masked pixels
-    # replaced, Gaussian-feathered edge, so diffusion color shift in the crop
-    # cannot leave a rectangular seam.
+    # Composite the diffusion crop back. Poisson (seamlessClone NORMAL_CLONE)
+    # is the default: regenerated high-frequency texture (shirt stripes) never
+    # phase-matches the original at the mask edge, and any alpha ramp leaves a
+    # visible cut or soft band there. Poisson keeps diffusion gradients inside
+    # the mask while pinning boundary pixels to the original frame, absorbing
+    # the mismatch as a smooth low-frequency correction. DIFFUERASER_BLEND=
+    # feather selects the old Gaussian-ramp composite as a fallback.
+    blend = os.environ.get("DIFFUERASER_BLEND", "poisson")
     feather = max(0, int(os.environ.get("PROPAINTER_FEATHER", "6")))
     crop_h = y1 - y0
     for k in range(n):
         sub = load_frame(os.path.join(out_dir, produced[k]))
         if sub.shape[0] != crop_h or sub.shape[1] != w:
             sub = cv2.resize(sub, (w, crop_h), interpolation=cv2.INTER_LINEAR)
+        base = frames[k][y0:y1, :]
+        mk = np.where(masks[k][y0:y1, :] > 127, 255, 0).astype(np.uint8)
+        merged = None
+        if blend == "poisson" and mk.any():
+            ys, xs = np.nonzero(mk)
+            center = (int((xs.min() + xs.max()) // 2),
+                      int((ys.min() + ys.max()) // 2))
+            try:
+                merged = cv2.seamlessClone(sub, base, mk, center,
+                                           cv2.NORMAL_CLONE)
+            except cv2.error:
+                merged = None
+        if merged is None:
+            a = mk.astype(np.float32) / 255.0
+            if feather > 0:
+                kf = max(3, feather // 2 * 2 + 1)
+                a = cv2.GaussianBlur(a, (kf, kf), 0)
+                peak = a.max()
+                if peak > 0:
+                    a /= peak
+            a = a[..., None]
+            merged = (base.astype(np.float32) * (1 - a)
+                      + sub.astype(np.float32) * a).astype(np.uint8)
         out = frames[k].copy()
-        a = masks[k][y0:y1, :].astype(np.float32) / 255.0
-        if feather > 0:
-            kf = max(3, feather // 2 * 2 + 1)
-            a = cv2.GaussianBlur(a, (kf, kf), 0)
-            peak = a.max()
-            if peak > 0:
-                a /= peak
-        a = a[..., None]
-        out[y0:y1, :] = (out[y0:y1, :].astype(np.float32) * (1 - a)
-                         + sub.astype(np.float32) * a).astype(np.uint8)
+        out[y0:y1, :] = merged
         cv2.imwrite(os.path.join(args.out, "%05d.png" % (args.start + k)), out)
 
 
