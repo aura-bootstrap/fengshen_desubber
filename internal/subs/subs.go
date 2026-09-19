@@ -469,8 +469,9 @@ type addBox struct {
 // Boxes that substantially overlap a classical box add nothing; the rest are
 // stroke-refined on a re-extracted band frame. A box whose strokes cannot be
 // validated keeps its frame box (for event aggregation) but is not painted.
-// Returns the number of boxes added.
-func fuseOCR(o Options, frames []events.Frame, masks, rawMasks []mask.Frame) int {
+// Returns the number of boxes added, plus the accepted OCR boxes by frame
+// (used to anchor the stroke masks to confirmed text).
+func fuseOCR(o Options, frames []events.Frame, masks, rawMasks []mask.Frame) (int, map[int][]ocr.Box) {
 	stride := o.OCRStride
 	if stride < 1 {
 		stride = 12
@@ -492,7 +493,7 @@ func fuseOCR(o Options, frames []events.Frame, masks, rawMasks []mask.Frame) int
 		boxes, err = o.OCR.DetectFrames(o.Input, o.Band.Y, o.Band.H, sample)
 		if err != nil {
 			logf(o.Log, "warn: ocr sidecar unavailable, continuing without it: %v\n", err)
-			return 0
+			return 0, nil
 		}
 	} else {
 		// Contiguous groups keep each sidecar's video seeks local; every group
@@ -526,7 +527,7 @@ func fuseOCR(o Options, frames []events.Frame, masks, rawMasks []mask.Frame) int
 		}
 		if ok == 0 {
 			logf(o.Log, "warn: ocr sidecar unavailable, continuing without it: %v\n", firstErr)
-			return 0
+			return 0, nil
 		}
 		if firstErr != nil {
 			logf(o.Log, "warn: ocr: %d/%d groups failed, continuing with partial results: %v\n", g-ok, g, firstErr)
@@ -579,7 +580,7 @@ func fuseOCR(o Options, frames []events.Frame, masks, rawMasks []mask.Frame) int
 		}
 	}
 	if (masks == nil && rawMasks == nil) || len(adds) == 0 {
-		return added
+		return added, byFrame
 	}
 	// Batch-extract every frame that needs stroke refinement in one ffmpeg
 	// pass. Boxes whose strokes cannot be validated are left unpainted: a
@@ -626,7 +627,73 @@ func fuseOCR(o Options, frames []events.Frame, masks, rawMasks []mask.Frame) int
 	if skipped > 0 {
 		logf(o.Log, "ocr: %d fused box(es) left unpainted (no strokes validated)\n", skipped)
 	}
-	return added
+	return added, byFrame
+}
+
+// anchorRawMasks drops stroke-level mask pixels lying outside every
+// OCR-confirmed text zone of their event. Static texture (pinstripes, glass
+// rims) the stroke detector misreads as text survives the temporal gate
+// because it never moves; the event-wide union then paints it into every
+// frame and the diffusion engine hallucinates washed-out content over real
+// scenery — the translucent "ghost" artifact. The zones are the union of
+// the event's OCR boxes padded by a fraction of the glyph height. Events
+// with no OCR confirmation keep their masks untouched so stylized text the
+// OCR cannot read is never dropped. Returns the number of pixels dropped.
+func anchorRawMasks(rawMasks []mask.Frame, evs []events.Event, byFrame map[int][]ocr.Box, charH, w, h int) int {
+	if len(byFrame) == 0 {
+		return 0
+	}
+	if charH < 8 {
+		charH = 8
+	}
+	margin := charH / 5
+	dropped := 0
+	for _, ev := range evs {
+		end := ev.EndF
+		if end >= len(rawMasks) {
+			end = len(rawMasks) - 1
+		}
+		var zones []imgx.Rect
+		for f := ev.StartF; f <= end; f++ {
+			for _, b := range byFrame[f] {
+				z := b.Rect.Expand(margin).Clamp(w, h)
+				if !z.Empty() {
+					zones = append(zones, z)
+				}
+			}
+		}
+		if len(zones) == 0 {
+			continue
+		}
+		allow := make([]uint8, w*h)
+		for _, z := range zones {
+			for y := z.Y; y < z.Bottom(); y++ {
+				row := y*w + z.X
+				for x := 0; x < z.W; x++ {
+					allow[row+x] = 1
+				}
+			}
+		}
+		for f := ev.StartF; f <= end; f++ {
+			if rawMasks[f].Empty() {
+				continue
+			}
+			bits := make([]uint8, w*h)
+			rawMasks[f].Decode(bits, w)
+			changed := false
+			for i, v := range bits {
+				if v != 0 && allow[i] == 0 {
+					bits[i] = 0
+					changed = true
+					dropped++
+				}
+			}
+			if changed {
+				rawMasks[f] = mask.Encode(bits, w, h)
+			}
+		}
+	}
+	return dropped
 }
 
 func logf(w io.Writer, format string, args ...any) {
@@ -750,8 +817,11 @@ func Build(o Options) (*Plan, error) {
 			return nil, err
 		}
 	}
+	var ocrByFrame map[int][]ocr.Box
 	if o.OCR != nil {
-		if n := fuseOCR(o, frames, masks, rawMasks); n > 0 {
+		var n int
+		n, ocrByFrame = fuseOCR(o, frames, masks, rawMasks)
+		if n > 0 {
 			logf(o.Log, "ocr: fused %d box(es) the classical detector missed\n", n)
 			det.Boxes += n
 		}
@@ -768,6 +838,9 @@ func Build(o Options) (*Plan, error) {
 	if len(rawMasks) == total {
 		makeMasksEventWide(rawMasks, evs)
 		limitMasks(rawMasks, evs, o.Params.MaskDilate*2, o.Band.H)
+		if n := anchorRawMasks(rawMasks, evs, ocrByFrame, o.Params.CharH, o.W, o.Band.H); n > 0 {
+			logf(o.Log, "ocr: anchored stroke masks, dropped %d px outside confirmed text zones\n", n)
+		}
 	}
 	return &Plan{
 		Events: evs, Masks: masks, RawMasks: rawMasks, Frames: frames, Detection: det,

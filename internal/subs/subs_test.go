@@ -7,6 +7,7 @@ import (
 
 	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/ocr"
 )
 
@@ -161,9 +162,12 @@ func TestFuseOCRUnionAndDedup(t *testing.T) {
 		}}, nil
 	})
 	o := Options{Input: "/in.mp4", W: 720, Band: Band{Y: 742, H: 538}, OCR: stub, OCRStride: 12}
-	added := fuseOCR(o, frames, nil, nil)
+	added, byFrame := fuseOCR(o, frames, nil, nil)
 	if added != 1 {
 		t.Fatalf("added = %d, want 1", added)
+	}
+	if len(byFrame[0]) != 2 {
+		t.Fatalf("byFrame[0] = %d boxes, want 2", len(byFrame[0]))
 	}
 	if len(frames[0].Boxes) != 2 {
 		t.Fatalf("frame 0 boxes = %d, want 2", len(frames[0].Boxes))
@@ -180,7 +184,44 @@ func TestFuseOCRDegradesOnError(t *testing.T) {
 		return ocr.Response{}, errors.New("exit status 2")
 	})
 	o := Options{Input: "/in.mp4", W: 720, Band: Band{Y: 742, H: 538}, OCR: stub, OCRStride: 1}
-	if added := fuseOCR(o, frames, nil, nil); added != 0 {
+	if added, _ := fuseOCR(o, frames, nil, nil); added != 0 {
 		t.Fatalf("added = %d, want 0 on sidecar failure", added)
+	}
+}
+
+func TestAnchorRawMasksDropsPixelsOutsideOCRZones(t *testing.T) {
+	const w, h = 100, 60
+	// Frame 0 mask: one pixel inside the OCR zone, one far outside (the
+	// static-texture false positive the anchor must remove).
+	bits := make([]uint8, w*h)
+	bits[20*w+30] = 1 // inside box (20..60, 10..30) with margin
+	bits[50*w+80] = 1 // outside every zone
+	raw := []mask.Frame{mask.Encode(bits, w, h), {}}
+	evs := []events.Event{ev(0, 1, imgx.Rect{X: 20, Y: 10, W: 40, H: 20})}
+	byFrame := map[int][]ocr.Box{
+		0: {{Frame: 0, Rect: imgx.Rect{X: 20, Y: 10, W: 40, H: 20}, Score: 0.9}},
+	}
+	anchorRawMasks(raw, evs, byFrame, 50, w, h)
+	got := make([]uint8, w*h)
+	raw[0].Decode(got, w)
+	if got[20*w+30] == 0 {
+		t.Fatal("pixel inside OCR zone was dropped")
+	}
+	if got[50*w+80] != 0 {
+		t.Fatal("pixel outside OCR zones survived anchoring")
+	}
+}
+
+func TestAnchorRawMasksKeepsEventsWithoutOCR(t *testing.T) {
+	const w, h = 100, 60
+	bits := make([]uint8, w*h)
+	bits[50*w+80] = 1
+	raw := []mask.Frame{mask.Encode(bits, w, h)}
+	evs := []events.Event{ev(0, 0, imgx.Rect{X: 20, Y: 10, W: 40, H: 20})}
+	anchorRawMasks(raw, evs, map[int][]ocr.Box{}, 50, w, h)
+	got := make([]uint8, w*h)
+	raw[0].Decode(got, w)
+	if got[50*w+80] == 0 {
+		t.Fatal("mask of an OCR-less event must stay untouched (stylized text)")
 	}
 }
