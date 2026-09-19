@@ -3,3 +3,6 @@ RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     diffusers==0.29.2 accelerate==0.25.0 transformers==4.41.1 \
     einops==0.8.0 peft==0.13.2 scipy==1.13.1 av==14.0.1 datasets==2.19.1 \
     "numpy==1.26.4" "pillow==10.4.0" "urllib3==2.2.2" "zipp==3.19.2"
+# SAM2 mask refinement: no PyPI release, pin the vendored commit.
+RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"

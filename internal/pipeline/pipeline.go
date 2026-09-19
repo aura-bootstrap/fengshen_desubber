@@ -23,6 +23,7 @@ import (
 	"github.com/aura-bootstrap/fengshen_desubber/internal/propainter"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/report"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/route"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/sam2"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/subs"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/vlmqc"
 )
@@ -55,6 +56,9 @@ type Options struct {
 	PainterRaftIter       int    // 0: model default 20
 	PainterNeighborLength int    // 0: model default 10
 	PainterConcurrency    int    // 0: default 2 concurrent chunk sidecars
+	SAM2                  bool   // refine masks to pixel level via the SAM2 sidecar before repair
+	SAM2Script            string
+	SAM2Home              string // SAM2_HOME checkout dir for the sidecar (empty: inherit env)
 	Grain                 bool   // texture-match the repaired area (internal/grain)
 	ForceEngine           string // R7.5: "motion"|"propainter" overrides the router for every event
 	VLMQC                 bool   // re-judge verify-stage residue boxes with a VLM
@@ -225,6 +229,23 @@ func Run(o Options) (*Report, error) {
 	params = plan.Params
 	fmt.Fprintf(o.Log, "detect: %d frames, %d with text (%d boxes, %d mask px), %d events, %.1fs\n",
 		det.Frames, det.TextFrames, det.Boxes, det.TextPix, len(evs), time.Since(t0).Seconds())
+
+	if o.SAM2 && len(masks) > 0 {
+		t0 = time.Now()
+		cl, cerr := sam2.NewClient(o.SAM2Script, 0)
+		if cerr != nil {
+			fmt.Fprintf(o.Log, "warn: sam2 disabled: %v\n", cerr)
+		} else {
+			cl.Home = o.SAM2Home
+			refined, rerr := cl.Refine(o.Input, info.W, b.Y, b.H, info.FPS, masks, cuts, o.Log)
+			if rerr != nil {
+				fmt.Fprintf(o.Log, "warn: sam2 refinement failed: %v; keeping stroke masks\n", rerr)
+			} else {
+				masks = refined
+				fmt.Fprintf(o.Log, "sam2: masks refined to pixel level (%.1fs)\n", time.Since(t0).Seconds())
+			}
+		}
+	}
 
 	rep := &Report{
 		Input: o.Input, Output: o.Output, Engine: o.Engine,

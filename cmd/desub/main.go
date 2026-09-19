@@ -223,6 +223,9 @@ func cmdRemove(args []string) error {
 	ppRaftIter := fs.Int("pp-raft-iter", 32, "ProPainter RAFT iterations (validated: 32)")
 	ppNeighbor := fs.Int("pp-neighbor-length", 20, "ProPainter local neighbor length (validated: 20)")
 	ppConcurrency := fs.Int("pp-concurrency", 1, "concurrent ProPainter chunk sidecars (GPU-bound; K=2 measured slower on 16GB cards)")
+	sam2On := fs.Bool("sam2", false, "refine masks to pixel level via the SAM2 sidecar before repair")
+	sam2Script := fs.String("sam2-script", "scripts/sam2_masks.py", "path to the SAM2 mask-refinement sidecar script")
+	sam2Home := fs.String("sam2-home", "", "SAM2_HOME checkout dir for the sidecar (empty: inherit env)")
 	grainOn := fs.Bool("grain", false, "match repaired-area texture (noise, chroma, blockiness) to the source")
 	forceEngine := fs.String("force-engine", "", "override routing for every event: motion|propainter")
 	vlmQC := fs.Bool("vlm-qc", false, "re-judge verify-stage residue boxes with a VLM (scripts/vlm_qc.py)")
@@ -266,6 +269,7 @@ func cmdRemove(args []string) error {
 		PainterTightDilate: *ppTightDilate,
 		PainterRaftIter:    *ppRaftIter, PainterNeighborLength: *ppNeighbor,
 		PainterConcurrency: *ppConcurrency,
+		SAM2: *sam2On, SAM2Script: *sam2Script, SAM2Home: *sam2Home,
 		Grain:              *grainOn, ForceEngine: *forceEngine, ManifestPath: *manifestOut,
 		VLMQC: *vlmQC, VLMScript: *vlmScript, VLMEndpoint: *vlmEndpoint, VLMModel: *vlmModel, VLMAPIKey: *vlmAPIKey,
 		RiskListPath: *riskList, RiskCoverage: *riskCov,
