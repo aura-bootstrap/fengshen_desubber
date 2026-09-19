@@ -30,12 +30,13 @@ type Event struct {
 }
 
 type DockerOptions struct {
-	Image string // desub:cu124
-	Lab   string // host path mounted at /work
-	Repo  string // host path mounted at /src
-	Bin   string // container path of the desub binary
-	GPUs  string // "all" enables --gpus; empty disables
-	Proxy string // host Clash endpoint
+	Image  string // desub:cu124
+	Lab    string // host path mounted at /work
+	Repo   string // host path mounted at /src
+	Bin    string // container path of the desub binary
+	GPUs   string // "all" enables --gpus; empty disables
+	Proxy  string // host Clash endpoint
+	KeyDir string // cardkey.json 所在目录(exe 目录),仅在线模式用
 }
 
 func (o *DockerOptions) defaults() {
@@ -52,13 +53,16 @@ func (o *DockerOptions) defaults() {
 
 // Params is the per-task flag snapshot stored with the task row.
 type Params struct {
-	Propainter  bool   `json:"propainter"`
-	Grain       bool   `json:"grain"`
-	OCR         bool   `json:"ocr"`
-	CRF         int    `json:"crf"`
-	ForceEngine string `json:"force_engine"`
-	PPConcurrency int  `json:"pp_concurrency"`
-	DiffuEraser bool   `json:"diffueraser"`
+	Propainter    bool   `json:"propainter"`
+	Grain         bool   `json:"grain"`
+	OCR           bool   `json:"ocr"`
+	CRF           int    `json:"crf"`
+	ForceEngine   string `json:"force_engine"`
+	PPConcurrency int    `json:"pp_concurrency"`
+	DiffuEraser   bool   `json:"diffueraser"`
+	// 在线去字幕:true 时不启 docker,走计费服务云端管线(见 online.go)。
+	Online   bool   `json:"online"`
+	Provider string `json:"provider"` // 云端引擎选择,可空(透传 X-Provider 头)
 }
 
 // args converts the snapshot into desub remove flags.
@@ -96,6 +100,10 @@ func Run(ctx context.Context, o DockerOptions, workDir, srcPath, outName, params
 			return fmt.Errorf("任务参数快照损坏: %v", err)
 		}
 	}
+	if p.Online {
+		// 在线分支:不 staging、不启容器,上传原片给计费服务云端处理。
+		return runOnline(ctx, o.KeyDir, workDir, srcPath, outName, p.Provider, events)
+	}
 	if err := stageInput(workDir, srcPath); err != nil {
 		return err
 	}
@@ -106,10 +114,10 @@ func Run(ctx context.Context, o DockerOptions, workDir, srcPath, outName, params
 		args = append(args, "--gpus", o.GPUs)
 	}
 	args = append(args,
-		"-v", filepath.Join(o.Lab) + `:/work`,
-		"-v", filepath.Join(o.Repo) + `:/src`,
-		"-v", filepath.Join(o.Lab, `docker\paddlex`) + `:/root/.paddlex`,
-		"-v", workDir + `:/task`,
+		"-v", filepath.Join(o.Lab)+`:/work`,
+		"-v", filepath.Join(o.Repo)+`:/src`,
+		"-v", filepath.Join(o.Lab, `docker\paddlex`)+`:/root/.paddlex`,
+		"-v", workDir+`:/task`,
 		"-w", "/work",
 		"-e", "HTTP_PROXY="+o.Proxy,
 		"-e", "HTTPS_PROXY="+o.Proxy,

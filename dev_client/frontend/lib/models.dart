@@ -102,6 +102,37 @@ class EngineEvent {
       );
 }
 
+/// 卡密状态(/api/cardkey/status),在线去字幕引擎使用。
+class CardKeyStatus {
+  final bool activated;
+  final String server;
+  final String masked; // 脱敏卡号,形如 ABCDE…Z
+  final int credits; // 剩余点数
+  final String machineHash;
+  final bool degraded; // 引擎侧降级(如云端暂不可达,余额为缓存值)
+  final bool stale; // 状态缓存过期
+
+  const CardKeyStatus({
+    required this.activated,
+    required this.server,
+    required this.masked,
+    required this.credits,
+    required this.machineHash,
+    required this.degraded,
+    required this.stale,
+  });
+
+  factory CardKeyStatus.fromJson(Map<String, dynamic> j) => CardKeyStatus(
+        activated: j['activated'] as bool? ?? false,
+        server: j['server'] as String? ?? '',
+        masked: j['masked'] as String? ?? '',
+        credits: (j['credits'] as num? ?? 0).toInt(),
+        machineHash: j['machine_hash'] as String? ?? '',
+        degraded: j['degraded'] as bool? ?? false,
+        stale: j['stale'] as bool? ?? false,
+      );
+}
+
 class ApiException implements Exception {
   final int statusCode;
   final String body;

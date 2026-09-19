@@ -94,6 +94,26 @@ class EngineClient {
   Future<void> runTask(int id) => _post('/api/tasks/$id/run');
   Future<void> stopTask(int id) => _post('/api/tasks/$id/stop');
 
+  /// 查询卡密状态(在线去字幕引擎)。
+  Future<CardKeyStatus> cardkeyStatus() async => CardKeyStatus.fromJson(
+      jsonDecode(await _get('/api/cardkey/status')) as Map<String, dynamic>);
+
+  /// 激活卡密;失败抛 ApiException(toString 即服务端中文错误文案)。
+  Future<void> activateCardKey({
+    required String server,
+    required String cardKey,
+  }) async {
+    final resp = await _http.post(_u('/api/cardkey/activate'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'server': server, 'card_key': cardKey}));
+    if (resp.statusCode != 200) {
+      throw ApiException(resp.statusCode, utf8.decode(resp.bodyBytes));
+    }
+  }
+
+  /// 解绑卡密。
+  Future<void> deactivateCardKey() => _post('/api/cardkey/deactivate');
+
   Future<void> _post(String path) async {
     final resp = await _http.post(_u(path));
     if (resp.statusCode >= 300) {

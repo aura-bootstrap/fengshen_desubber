@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fengshen-desub/internal/cardkey"
+	"fengshen-desub/internal/runner"
 	"fengshen-desub/internal/store"
 )
 
@@ -54,6 +56,15 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		req.OutName = req.Name + "_fixed.mp4"
 	}
 	snap, _ := json.Marshal(req.Params)
+
+	// 在线去字幕前置校验:未激活卡密直接在创建期 400,不入库(尽早失败)。
+	var rp runner.Params
+	if err := json.Unmarshal(snap, &rp); err == nil && rp.Online {
+		if _, err := cardkey.LoadKeyFile(s.exeDir); err != nil {
+			writeErr(w, http.StatusBadRequest, "在线去字幕需要先激活卡密(设置页 -> 卡密激活)")
+			return
+		}
+	}
 
 	tk := &store.Task{
 		Name: req.Name, SrcPath: src, OutName: req.OutName, ParamsJSON: string(snap),

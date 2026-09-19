@@ -185,7 +185,7 @@ func (t *TaskDB) LatestTask() (*Task, error) {
 
 // NextQueued pops the oldest queued task, or nil.
 func (t *TaskDB) NextQueued() (*Task, error) {
-	rows, err := t.db.Query(`SELECT ` + taskCols + ` FROM tasks WHERE status=? ORDER BY id LIMIT 1`, TaskQueued)
+	rows, err := t.db.Query(`SELECT `+taskCols+` FROM tasks WHERE status=? ORDER BY id LIMIT 1`, TaskQueued)
 	if err != nil {
 		return nil, err
 	}

@@ -81,6 +81,9 @@ func main() {
 	mux.HandleFunc("POST /api/tasks/{id}/stop", s.handleTaskStop)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleTaskDelete)
 	mux.HandleFunc("GET /api/events", s.hub.handleSSE)
+	mux.HandleFunc("GET /api/cardkey/status", s.handleCardkeyStatus)
+	mux.HandleFunc("POST /api/cardkey/activate", s.handleCardkeyActivate)
+	mux.HandleFunc("POST /api/cardkey/deactivate", s.handleCardkeyDeactivate)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "task_mode": s.taskMode})
 	})

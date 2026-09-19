@@ -19,6 +19,38 @@ class AppState extends ChangeNotifier {
   final Map<int, List<String>> logs = {};
   int? watchingTaskId;
 
+  /// 卡密状态(在线去字幕引擎);null = 尚未查询成功。
+  CardKeyStatus? cardKey;
+  bool cardKeyLoading = false;
+  String? cardKeyError;
+
+  /// 拉取卡密状态;失败保留错误文案供界面展示重试。
+  Future<void> refreshCardKey() async {
+    cardKeyLoading = true;
+    cardKeyError = null;
+    notifyListeners();
+    try {
+      cardKey = await client.cardkeyStatus();
+    } catch (e) {
+      print('[cardkey] status failed: $e');
+      cardKeyError = '$e';
+    }
+    cardKeyLoading = false;
+    notifyListeners();
+  }
+
+  /// 激活卡密,成功后刷新状态;失败原样上抛(ApiException 中文文案)。
+  Future<void> activateCardKey(String server, String cardKey) async {
+    await client.activateCardKey(server: server, cardKey: cardKey);
+    await refreshCardKey();
+  }
+
+  /// 解绑卡密,成功后刷新状态。
+  Future<void> deactivateCardKey() async {
+    await client.deactivateCardKey();
+    await refreshCardKey();
+  }
+
   Future<void> boot(String engineExe) async {
     try {
       print('[boot] engine exe: $engineExe exists=${File(engineExe).existsSync()}');
