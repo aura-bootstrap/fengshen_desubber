@@ -15,6 +15,7 @@ import (
 	"github.com/aura-bootstrap/fengshen_desubber/internal/detect"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/engine"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/events"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/facerestore"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/manifest"
@@ -59,6 +60,8 @@ type Options struct {
 	SAM2                  bool   // refine masks to pixel level via the SAM2 sidecar before repair
 	SAM2Script            string
 	SAM2Home              string // SAM2_HOME checkout dir for the sidecar (empty: inherit env)
+	FaceRestore           bool   // restore faces inside the repair zone via the GFPGAN sidecar
+	FaceRestoreScript     string
 	Grain                 bool   // texture-match the repaired area (internal/grain)
 	ForceEngine           string // R7.5: "motion"|"propainter" overrides the router for every event
 	VLMQC                 bool   // re-judge verify-stage residue boxes with a VLM
@@ -324,6 +327,9 @@ func Run(o Options) (*Report, error) {
 					cl.Concurrency = o.PainterConcurrency
 					painter = cl
 				}
+			}
+			if painter != nil && o.FaceRestore {
+				painter = &facerestore.Painter{Inner: painter, Script: o.FaceRestoreScript, Log: o.Log}
 			}
 			var barList []alpha.FrameBar
 			base.Bars = &barList
