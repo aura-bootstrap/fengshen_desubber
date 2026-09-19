@@ -94,7 +94,8 @@ class TaskCard extends StatelessWidget {
                   child: Text(statusText, style: TextStyle(fontSize: 11, color: badgeColor)),
                 ),
                 const SizedBox(width: 8),
-                Text(task.stageLabel, style: TextStyle(fontSize: 12, color: t.dim)),
+                if (task.active)
+                  Text(task.stageLabel, style: TextStyle(fontSize: 12, color: t.dim)),
               ],
             ),
             const SizedBox(height: 6),
@@ -114,11 +115,17 @@ class TaskCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: LinearProgressIndicator(
-                    value: task.status == 'running' && task.total > 0 ? task.progress : null,
+                    // 仅运行中且无帧计数时走不确定动画;其余一律确定值:
+                    // 完成=满格静止,失败/停止=停在当时进度,排队/待运行=空
+                    value: task.status == 'running' && task.total <= 0 ? null : task.progress,
                     minHeight: 6,
                     borderRadius: BorderRadius.circular(3),
-                    valueColor: AlwaysStoppedAnimation(
-                        task.status == 'failed' ? t.danger : t.primary),
+                    valueColor: AlwaysStoppedAnimation(switch (task.status) {
+                      'succeeded' => t.success,
+                      'failed' => t.danger,
+                      'stopped' => t.dim,
+                      _ => t.primary,
+                    }),
                   ),
                 ),
                 const SizedBox(width: 10),
