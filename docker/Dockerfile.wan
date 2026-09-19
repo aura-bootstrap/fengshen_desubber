@@ -1,0 +1,14 @@
+# desub:cu124-wan — cu124 + Wan2.1 VACE 推理依赖（跳过 flash_attn/gradio）
+# flash_attn 在 wan/modules/attention.py 里是 try/except 守卫，缺失自动回落 torch attention；
+# gradio 只用于 demo。dashscope 必须装：generate.py 模块级导入 prompt_extend，
+# 后者顶层 import dashscope（实测缺它 generate.py 起不来）。
+# 构建：
+#   docker build -f W:/QoderCN/desub-lab/docker/Dockerfile.wan -t desub:cu124-wan \
+#     --build-arg HTTP_PROXY=http://host.docker.internal:7897 \
+#     --build-arg HTTPS_PROXY=http://host.docker.internal:7897 W:/QoderCN/desub-lab
+FROM desub:cu124
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+RUN pip3 install --no-cache-dir \
+    "diffusers>=0.31.0" "transformers>=4.49.0" "tokenizers>=0.20.3" \
+    "accelerate>=1.1.1" imageio imageio-ffmpeg easydict ftfy "numpy<2" dashscope decord
