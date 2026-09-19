@@ -39,6 +39,63 @@ def fail(msg):
     sys.exit(3)
 
 
+def _stripe_shift(base, mk):
+    """Estimate a phase-aligned translation for periodic texture crossing the
+    mask edge. Returns (dx, dy) of an integer number of stripe periods toward
+    the side with the strongest texture, or (0, 0) when the neighbourhood is
+    not periodic (plain cloth, skin, background)."""
+    import cv2
+    import numpy as np
+    if not mk.any():
+        return 0, 0
+    g = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
+    e = cv2.GaussianBlur(
+        np.abs(cv2.Laplacian(g, cv2.CV_64F)).astype(np.float32), (0, 0), 2.0)
+    ring = (cv2.dilate(mk, np.ones((21, 21), np.uint8)) > 0) & (mk == 0)
+    if not ring.any():
+        return 0, 0
+    ys, xs = np.nonzero(mk)
+    cx, cy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
+    yy, xx = np.nonzero(ring)
+    best_side, best_e = None, 0.0
+    for name, sel in (("right", xx > cx), ("left", xx <= cx),
+                      ("bottom", yy > cy), ("top", yy <= cy)):
+        if not sel.any():
+            continue
+        v = float(e[yy[sel], xx[sel]].mean())
+        if v > best_e:
+            best_side, best_e = name, v
+    h, w = g.shape
+    if best_side == "right":
+        band = g[:, xs.max() + 1:min(w, xs.max() + 131)]
+    elif best_side == "left":
+        band = g[:, max(0, xs.min() - 130):xs.min()]
+    elif best_side == "bottom":
+        band = g[ys.max() + 1:min(h, ys.max() + 131), :]
+    else:
+        band = g[max(0, ys.min() - 130):ys.min(), :]
+    if band.size == 0:
+        return 0, 0
+    axis = 0 if best_side in ("right", "left") else 1
+    prof = band.mean(axis=axis).astype(np.float32)
+    prof -= prof.mean()
+    ac = np.correlate(prof, prof, "full")[len(prof) - 1:]
+    if ac[0] <= 1e-9 or len(ac) < 12:
+        return 0, 0
+    ac /= ac[0]
+    lag = 3 + int(np.argmax(ac[3:12]))
+    if ac[lag] < 0.4:
+        return 0, 0
+    delta = max(lag, round(128 / lag) * lag)
+    if best_side == "right":
+        return delta, 0
+    if best_side == "left":
+        return -delta, 0
+    if best_side == "bottom":
+        return 0, delta
+    return 0, -delta
+
+
 def load_frame(path):
     import cv2
     img = cv2.imread(path, cv2.IMREAD_COLOR)
@@ -190,10 +247,25 @@ def main():
     # Diffusion output is also measurably softer than the source texture
     # (stripe contrast ~15 vs ~19), so the masked area gets a mild unsharp
     # boost before cloning (DIFFUERASER_SHARPEN, 0 disables).
+    # Poisson pins boundary values but cannot phase-align periodic texture:
+    # regenerated pinstripes keep a random phase, so stripes break at the
+    # mask edge even after cloning. When the texture just outside the mask
+    # is strongly periodic, we additionally re-clone from the SAME source
+    # frame translated by an integer number of stripe periods (boundary
+    # phase matches by construction), and adopt that clone only where its
+    # low-frequency colour agrees with the diffusion composite — pinstripe
+    # cloth passes the gate, skin/glass/plain cloth keeps the diffusion
+    # pixels (DIFFUERASER_STRIPES, 0 disables). The shift is estimated once
+    # per chunk so frames cannot drift against each other.
     blend = os.environ.get("DIFFUERASER_BLEND", "poisson")
     feather = max(0, int(os.environ.get("PROPAINTER_FEATHER", "6")))
     sharpen = float(os.environ.get("DIFFUERASER_SHARPEN", "0.6"))
     crop_h = y1 - y0
+    sp_dx = sp_dy = 0
+    if os.environ.get("DIFFUERASER_STRIPES", "1") != "0" and n > 0:
+        k0 = n // 2
+        mk0 = np.where(masks[k0][y0:y1, :] > 127, 255, 0).astype(np.uint8)
+        sp_dx, sp_dy = _stripe_shift(frames[k0][y0:y1, :], mk0)
     for k in range(n):
         sub = load_frame(os.path.join(out_dir, produced[k]))
         if sub.shape[0] != crop_h or sub.shape[1] != w:
@@ -228,6 +300,48 @@ def main():
             a = a[..., None]
             merged = (base.astype(np.float32) * (1 - a)
                       + sub.astype(np.float32) * a).astype(np.uint8)
+        if (sp_dx or sp_dy) and mk.any():
+            # the shift source must be subtitle-free: the raw base carries the
+            # white glyphs, and translating them into the stripe zone passes
+            # the low-frequency gate (white ≈ bright stripe). Erase the stroke
+            # pixels first; Telea extends the surrounding texture into the
+            # glyph cells, which is exactly the phase-correct content the
+            # re-clone should sample.
+            hsv = cv2.cvtColor(base, cv2.COLOR_BGR2HSV)
+            white = (((hsv[:, :, 1] < 80) & (hsv[:, :, 2] > 190))
+                     & (mk > 0)).astype(np.uint8) * 255
+            stroke = cv2.dilate(white, np.ones((9, 9), np.uint8))
+            clean = (cv2.inpaint(base, stroke, 6, cv2.INPAINT_TELEA)
+                     if stroke.any() else base)
+            m_sh = np.float32([[1, 0, sp_dx], [0, 1, sp_dy]])
+            shifted = cv2.warpAffine(clean, m_sh, (w, crop_h),
+                                     flags=cv2.INTER_LINEAR,
+                                     borderMode=cv2.BORDER_REPLICATE)
+            ys, xs = np.nonzero(mk)
+            center = (int((xs.min() + xs.max()) // 2),
+                      int((ys.min() + ys.max()) // 2))
+            try:
+                clone2 = cv2.seamlessClone(shifted, merged, mk, center,
+                                           cv2.NORMAL_CLONE)
+            except cv2.error:
+                clone2 = None
+            if clone2 is not None:
+                lc = cv2.GaussianBlur(
+                    cv2.cvtColor(clone2, cv2.COLOR_BGR2Lab),
+                    (0, 0), 4.0).astype(np.float32)
+                lm = cv2.GaussianBlur(
+                    cv2.cvtColor(merged, cv2.COLOR_BGR2Lab),
+                    (0, 0), 4.0).astype(np.float32)
+                dist = np.linalg.norm(lc - lm, axis=2)
+                alpha = np.exp(-(dist / 12.0) ** 2)
+                alpha[mk == 0] = 0
+                alpha = cv2.GaussianBlur(alpha, (0, 0), 3.0)
+                am = alpha.max()
+                if am > 0:
+                    alpha /= am
+                merged = (merged.astype(np.float32) * (1 - alpha[..., None])
+                          + clone2.astype(np.float32)
+                          * alpha[..., None]).astype(np.uint8)
         out = frames[k].copy()
         out[y0:y1, :] = merged
         cv2.imwrite(os.path.join(args.out, "%05d.png" % (args.start + k)), out)
