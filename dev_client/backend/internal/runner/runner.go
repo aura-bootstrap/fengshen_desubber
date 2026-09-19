@@ -43,7 +43,7 @@ func (o *DockerOptions) defaults() {
 		o.Image = "desub:cu124"
 	}
 	if o.Bin == "" {
-		o.Bin = "/src/bin/desub-lx-v6"
+		o.Bin = "/src/bin/desub-lx-v10"
 	}
 	if o.Proxy == "" {
 		o.Proxy = "http://host.docker.internal:7897"
