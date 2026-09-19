@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/aura-bootstrap/fengshen_desubber/internal/motion"
@@ -245,5 +246,52 @@ func TestEncoderArgsCarryColorMetadata(t *testing.T) {
 	}
 	if ci < 0 || vi < 0 || ci > vi {
 		t.Fatalf("colour flags misplaced: colorspace@%d c:v@%d", ci, vi)
+	}
+}
+
+func TestEncoderArgsCarryHDRProfile(t *testing.T) {
+	o := TemporalOptions{
+		Input: "in.mp4", Output: "out.mp4", FPS: 25, CRF: 17, Preset: "medium",
+		EncColor:  []string{"-colorspace", "bt2020nc", "-color_trc", "smpte2084"},
+		EncCodec:  "libx265",
+		EncPixFmt: "yuv420p10le",
+		EncHDR:    []string{"-x265-params", "max-cll=1000,400", "-tag:v", "hvc1"},
+	}
+	args := temporalEncoderArgs(o, 640, 100, 260)
+	has := func(flag, val string) bool {
+		for i, a := range args {
+			if a == flag && i+1 < len(args) && args[i+1] == val {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("-c:v", "libx265") {
+		t.Fatalf("libx265 missing: %v", args)
+	}
+	if !has("-x265-params", "max-cll=1000,400") {
+		t.Fatalf("x265 params missing: %v", args)
+	}
+	filterHas10bit := false
+	for _, a := range args {
+		if strings.Contains(a, "format=yuv420p10le") {
+			filterHas10bit = true
+		}
+	}
+	if !filterHas10bit {
+		t.Fatalf("filter still forces 8-bit: %v", args)
+	}
+	// HDR params must precede -c:v so they bind to the output stream.
+	var hi, ci int = -1, -1
+	for i, a := range args {
+		switch a {
+		case "-x265-params":
+			hi = i
+		case "-c:v":
+			ci = i
+		}
+	}
+	if hi < 0 || ci < 0 || hi > ci {
+		t.Fatalf("HDR params misplaced: x265-params@%d c:v@%d", hi, ci)
 	}
 }

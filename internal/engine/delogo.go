@@ -21,6 +21,10 @@ type DelogoOptions struct {
 	Preset string
 	// EncColor carries ffx.MediaInfo.ColorEncodeArgs() output (R9.3).
 	EncColor []string
+	// EncCodec/EncPixFmt/EncHDR carry ffx.MediaInfo.EncodeProfile() output.
+	EncCodec  string
+	EncPixFmt string
+	EncHDR    []string
 }
 
 // RunDelogo builds one ffmpeg filtergraph with a timed delogo box per event.
@@ -42,14 +46,26 @@ func RunDelogo(o DelogoOptions) error {
 	if len(parts) > maxBoxes {
 		return fmt.Errorf("delogo: %d boxes exceeds single-pass limit (%d), split the input", len(parts), maxBoxes)
 	}
-	vf := strings.Join(parts, ",") + ",format=yuv420p"
+	codec, pixFmt := o.EncCodec, o.EncPixFmt
+	if codec == "" {
+		codec = "libx264"
+	}
+	if pixFmt == "" {
+		pixFmt = "yuv420p"
+	}
+	threads := ffx.CPUWorkers()
+	if codec == "libx265" && threads > 16 {
+		threads = 16 // x265 hard-caps frame-threads at 16
+	}
+	vf := strings.Join(parts, ",") + ",format=" + pixFmt
 	args := []string{"-hide_banner", "-nostdin", "-y", "-loglevel", "error",
 		"-i", o.Input, "-vf", vf,
 		"-map", "0:v:0", "-map", "0:a?"}
 	args = append(args, o.EncColor...)
+	args = append(args, o.EncHDR...)
 	args = append(args,
-		"-c:v", "libx264", "-crf", fmt.Sprint(o.CRF), "-preset", o.Preset,
-		"-threads", fmt.Sprint(ffx.CPUWorkers()),
-		"-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", o.Output)
+		"-c:v", codec, "-crf", fmt.Sprint(o.CRF), "-preset", o.Preset,
+		"-threads", fmt.Sprint(threads),
+		"-pix_fmt", pixFmt, "-c:a", "copy", "-movflags", "+faststart", o.Output)
 	return ffx.Run(args...)
 }

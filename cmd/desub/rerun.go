@@ -105,6 +105,7 @@ func cmdRerun(args []string) error {
 		Engine: seg.Engine,
 		Risk:   seg.Risk,
 	}}
+	encCodec, encPixFmt, encHDR := info.EncodeProfile()
 	frep, err := engine.RunFill(engine.FillOptions{
 		TemporalOptions: engine.TemporalOptions{
 			Input: segIn, Output: segOut, W: info.W, H: info.H,
@@ -114,6 +115,7 @@ func cmdRerun(args []string) error {
 			Motion: !*noMotion, Alpha: *alphaOn, CharH: m.CharH,
 			Grain:    *grainOn,
 			EncColor: info.ColorEncodeArgs(),
+			EncCodec: encCodec, EncPixFmt: encPixFmt, EncHDR: encHDR,
 		},
 		Events:    []events.Event{decisions[0].Event},
 		Decisions: decisions,
@@ -138,9 +140,10 @@ func cmdRerun(args []string) error {
 		"-filter_complex", fmt.Sprintf("[0:v][1:v]overlay=0:0:enable='between(n,%d,%d)'[v]", seg.StartF, seg.EndF),
 		"-map", "[v]", "-map", "0:a?"}
 	splice = append(splice, info.ColorEncodeArgs()...)
+	splice = append(splice, encHDR...)
 	splice = append(splice,
-		"-c:v", "libx264", "-crf", fmt.Sprint(*crf), "-preset", *preset,
-		"-c:a", "copy", "-movflags", "+faststart", *out)
+		"-c:v", encCodec, "-crf", fmt.Sprint(*crf), "-preset", *preset,
+		"-pix_fmt", encPixFmt, "-c:a", "copy", "-movflags", "+faststart", *out)
 	if out1, err := exec.Command(ffx.FFmpeg(), splice...).CombinedOutput(); err != nil {
 		return fmt.Errorf("splice: %v: %s", err, tail(out1, 300))
 	}

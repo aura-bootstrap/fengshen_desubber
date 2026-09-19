@@ -246,6 +246,13 @@ func Run(o Options) (*Report, error) {
 
 	if o.Output != "" {
 		t0 = time.Now()
+		encCodec, encPixFmt, encHDR := info.EncodeProfile()
+		if info.DoVi {
+			fmt.Fprintf(o.Log, "warn: Dolby Vision RPU cannot survive re-encode; output keeps the HDR10/SDR base layer only\n")
+		}
+		if info.IsHDR() {
+			fmt.Fprintf(o.Log, "hdr: %s/%s output, preserving mastering metadata\n", encCodec, encPixFmt)
+		}
 		switch o.Engine {
 		case "delogo":
 			full := make([]events.Event, len(evs))
@@ -257,6 +264,7 @@ func Run(o Options) (*Report, error) {
 				Input: o.Input, Output: o.Output, W: info.W, H: info.H,
 				Events: full, Pad: o.Pad, CRF: o.CRF, Preset: o.Preset,
 				EncColor: info.ColorEncodeArgs(),
+				EncCodec: encCodec, EncPixFmt: encPixFmt, EncHDR: encHDR,
 			})
 		case "temporal":
 			base := engine.TemporalOptions{
@@ -266,6 +274,7 @@ func Run(o Options) (*Report, error) {
 				RegionPad: params.MaskDilate * 2, Motion: o.Motion,
 				Alpha: o.Alpha, CharH: params.CharH, Grain: o.Grain,
 				EncColor: info.ColorEncodeArgs(),
+				EncCodec: encCodec, EncPixFmt: encPixFmt, EncHDR: encHDR,
 				Progress: func(f, t int) { fmt.Fprintf(o.Log, "repair %d/%d\r", f, t) },
 			}
 			mags, merr := engine.EstimateMags(base)

@@ -93,6 +93,12 @@ type TemporalOptions struct {
 	// EncColor carries ffx.MediaInfo.ColorEncodeArgs() output so the encode
 	// preserves the input's colour space/transfer/primaries (R9.3).
 	EncColor []string
+	// EncCodec/EncPixFmt/EncHDR carry ffx.MediaInfo.EncodeProfile() output:
+	// codec name ("libx264", empty = default), output pixel format, and
+	// extra HDR encoder flags (x265-params, codec tag).
+	EncCodec  string
+	EncPixFmt string
+	EncHDR    []string
 	// Grain enables texture matching (internal/grain) inside the feathered
 	// mask: noise injection, chroma alignment and, when the source measures
 	// blocky, 8x8 boundary steps.
@@ -424,16 +430,28 @@ func runCore(o TemporalOptions, painted map[int][]byte) error {
 }
 
 func temporalEncoderArgs(o TemporalOptions, w, hb, by int) []string {
+	codec, pixFmt := o.EncCodec, o.EncPixFmt
+	if codec == "" {
+		codec = "libx264"
+	}
+	if pixFmt == "" {
+		pixFmt = "yuv420p"
+	}
+	threads := ffx.CPUWorkers()
+	if codec == "libx265" && threads > 16 {
+		threads = 16 // x265 hard-caps frame-threads at 16
+	}
 	args := []string{"-hide_banner", "-nostdin", "-y", "-loglevel", "error",
 		"-i", o.Input,
 		"-f", "rawvideo", "-pix_fmt", "rgba", "-s", fmt.Sprintf("%dx%d", w, hb),
 		"-r", fmt.Sprintf("%.6f", o.FPS), "-i", "pipe:0",
-		"-filter_complex", fmt.Sprintf("[0:v][1:v]overlay=0:%d:eof_action=pass:format=auto,format=yuv420p[v]", by),
+		"-filter_complex", fmt.Sprintf("[0:v][1:v]overlay=0:%d:eof_action=pass:format=auto,format=%s[v]", by, pixFmt),
 		"-map", "[v]", "-map", "0:a?"}
 	args = append(args, o.EncColor...)
+	args = append(args, o.EncHDR...)
 	return append(args,
-		"-c:v", "libx264", "-crf", fmt.Sprint(o.CRF), "-preset", o.Preset,
-		"-threads", fmt.Sprint(ffx.CPUWorkers()),
+		"-c:v", codec, "-crf", fmt.Sprint(o.CRF), "-preset", o.Preset,
+		"-threads", fmt.Sprint(threads),
 		"-c:a", "copy", "-movflags", "+faststart", o.Output)
 }
 
