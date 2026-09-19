@@ -19,11 +19,9 @@ run_diffueraser.py), DIFFUERASER_EXTRA_ARGS (appended verbatim).
 
 STATUS: written against the upstream README but NOT integration-tested (needs
 GPU: 12G@640x360 … 33G@1280x720). Bring-up notes:
-  - upstream run_diffueraser.py has no argparse: it reads module-level
-    input_video / input_mask variables. This sidecar calls ENTRY with
-    --input_video/--input_mask/--output_dir; if your checkout lacks them,
-    add the 6-line argparse shim shown in doc/bringup notes or set
-    DIFFUERASER_ENTRY to your own wrapper.
+  - upstream run_diffueraser.py gained argparse (--input_video/--input_mask/
+    --save_path/...) in our checkout; if yours lacks it, set DIFFUERASER_ENTRY
+    to your own wrapper.
   - mask video polarity: white = region to erase (same as ProPainter);
     verify on the first run.
   - video and mask must be mp4 with identical fps (upstream misalignment
@@ -31,6 +29,7 @@ GPU: 12G@640x360 … 33G@1280x720). Bring-up notes:
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -81,6 +80,13 @@ def main():
         masks.append(m)
     h, w = frames[0].shape[:2]
 
+    # DiffuEraser rejects inputs shorter than 22 frames; pad by repeating the
+    # last frame/mask. Padded outputs are discarded on composite.
+    while len(frames) < 22:
+        frames.append(frames[-1])
+        masks.append(masks[-1])
+    n_in = len(frames)
+
     # Same vertical-context crop as the ProPainter sidecar (R5.2).
     ys = np.zeros(h, dtype=bool)
     for m in masks:
@@ -95,13 +101,22 @@ def main():
     pad = int(mh * 1.75 + 0.5)
     y0 = max(0, rows[0] - pad)
     y1 = min(h, rows[-1] + pad + 1)
+    # libx264 yuv420p mask video needs even height
+    if (y1 - y0) % 2:
+        if y1 < h:
+            y1 += 1
+        elif y0 > 0:
+            y0 -= 1
+        else:
+            y1 -= 1
 
     work = os.path.join(args.out, ".work-diffueraser")
+    shutil.rmtree(work, ignore_errors=True)
     frames_dir_in = os.path.join(work, "frames")
     mask_dir = os.path.join(work, "mask")
     os.makedirs(frames_dir_in, exist_ok=True)
     os.makedirs(mask_dir, exist_ok=True)
-    for k in range(n):
+    for k in range(n_in):
         cv2.imwrite(os.path.join(frames_dir_in, "%05d.png" % k), frames[k][y0:y1, :])
         mk = np.where(masks[k][y0:y1] > 127, 255, 0).astype(np.uint8)
         cv2.imwrite(os.path.join(mask_dir, "%05d.png" % k), mk)
@@ -128,10 +143,15 @@ def main():
     cmd = [sys.executable, entry,
            "--input_video", sub_video,
            "--input_mask", mask_video,
-           "--output_dir", result_dir]
+           "--save_path", result_dir]
     extra = os.environ.get("DIFFUERASER_EXTRA_ARGS", "")
     if extra:
         cmd += extra.split()
+    # Our masks are already dilated upstream (tight-dilate + mask-dilation);
+    # DiffuEraser's default dilation 8 is calibrated for raw stroke masks and
+    # would over-erode context (waxy fills, glass/rim loss).
+    if "--mask_dilation_iter" not in extra:
+        cmd += ["--mask_dilation_iter", "2"]
     r = subprocess.run(cmd, cwd=home, capture_output=True, text=True)
     if r.returncode != 0:
         fail(f"inference exit {r.returncode}: {(r.stderr or r.stdout)[-400:]}")
@@ -157,13 +177,26 @@ def main():
     if len(produced) < n:
         fail(f"result has {len(produced)} frames, want {n}")
 
+    # Feathered composite (same as propainter sidecar): only masked pixels
+    # replaced, Gaussian-feathered edge, so diffusion color shift in the crop
+    # cannot leave a rectangular seam.
+    feather = max(0, int(os.environ.get("PROPAINTER_FEATHER", "6")))
     crop_h = y1 - y0
     for k in range(n):
         sub = load_frame(os.path.join(out_dir, produced[k]))
         if sub.shape[0] != crop_h or sub.shape[1] != w:
             sub = cv2.resize(sub, (w, crop_h), interpolation=cv2.INTER_LINEAR)
         out = frames[k].copy()
-        out[y0:y1, :] = sub
+        a = masks[k][y0:y1, :].astype(np.float32) / 255.0
+        if feather > 0:
+            kf = max(3, feather // 2 * 2 + 1)
+            a = cv2.GaussianBlur(a, (kf, kf), 0)
+            peak = a.max()
+            if peak > 0:
+                a /= peak
+        a = a[..., None]
+        out[y0:y1, :] = (out[y0:y1, :].astype(np.float32) * (1 - a)
+                         + sub.astype(np.float32) * a).astype(np.uint8)
         cv2.imwrite(os.path.join(args.out, "%05d.png" % (args.start + k)), out)
 
 

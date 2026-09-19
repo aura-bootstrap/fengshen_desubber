@@ -28,8 +28,10 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   bool propainter = true;
   bool grain = true;
   bool ocr = true;
-  // 引擎路由只留 propainter:自动路由会把慢动事件分进 motion 档留残影,
-  // 质量优先于耗时,固定强制 ProPainter(对齐 slice1-pp-grain tag 参数)
+  // 修复引擎:DiffuEraser 扩散模型(默认,画质最好,最慢)或 ProPainter。
+  // 引擎路由只留 painter 档:自动路由会把慢动事件分进 motion 档留残影,
+  // 质量优先于耗时,固定强制(force_engine 对齐 slice1-pp-grain tag 参数)
+  bool diffueraser = true;
   static const forceEngine = 'propainter';
   bool runNow = true;
   bool busy = false;
@@ -69,6 +71,7 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
           'ocr': ocr,
           'crf': int.tryParse(crfCtrl.text) ?? 0,
           'force_engine': forceEngine,
+          'diffueraser': diffueraser,
         },
         runNow: runNow,
       );
@@ -144,8 +147,17 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                Text('引擎: ProPainter(强制)',
-                    style: TextStyle(fontSize: 13, color: t.dim)),
+                Text('引擎:', style: TextStyle(fontSize: 13, color: t.dim)),
+                const SizedBox(width: 8),
+                DropdownButton<bool>(
+                  value: diffueraser,
+                  isDense: true,
+                  items: const [
+                    DropdownMenuItem(value: true, child: Text('DiffuEraser 扩散(最佳画质,慢)', style: TextStyle(fontSize: 13))),
+                    DropdownMenuItem(value: false, child: Text('ProPainter(快)', style: TextStyle(fontSize: 13))),
+                  ],
+                  onChanged: busy ? null : (v) => setState(() => diffueraser = v ?? true),
+                ),
               ],
             ),
             const SizedBox(height: 8),

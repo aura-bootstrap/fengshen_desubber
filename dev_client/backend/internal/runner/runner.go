@@ -58,6 +58,7 @@ type Params struct {
 	CRF         int    `json:"crf"`
 	ForceEngine string `json:"force_engine"`
 	PPConcurrency int  `json:"pp_concurrency"`
+	DiffuEraser bool   `json:"diffueraser"`
 }
 
 // args converts the snapshot into desub remove flags.
@@ -98,6 +99,8 @@ func Run(ctx context.Context, o DockerOptions, workDir, srcPath, outName, params
 	if err := stageInput(workDir, srcPath); err != nil {
 		return err
 	}
+	image := o.Image
+	painterScript := "/src/scripts/propainter_infer.py"
 	args := []string{"run", "--rm", "--name", containerName(workDir)}
 	if o.GPUs != "" {
 		args = append(args, "--gpus", o.GPUs)
@@ -113,9 +116,16 @@ func Run(ctx context.Context, o DockerOptions, workDir, srcPath, outName, params
 		"-e", "NO_PROXY=host.docker.internal,127.0.0.1,localhost",
 		"-e", "PROPAINTER_HOME=/work/vendor/ProPainter",
 		"-e", "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True",
-		o.Image, o.Bin, "remove", "/task/input.mp4",
+	)
+	if p.DiffuEraser {
+		image = "desub:diffueraser"
+		painterScript = "/src/scripts/diffueraser_infer.py"
+		args = append(args, "-e", "DIFFUERASER_HOME=/work/vendor/DiffuEraser")
+	}
+	args = append(args,
+		image, o.Bin, "remove", "/task/input.mp4",
 		"-o", "/task/"+outName,
-		"--propainter-script", "/src/scripts/propainter_infer.py",
+		"--propainter-script", painterScript,
 	)
 	if p.OCR {
 		args = append(args, "--ocr-script", "/src/scripts/ocr_boxes.py")
