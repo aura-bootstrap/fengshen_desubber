@@ -187,8 +187,12 @@ def main():
     # the mask while pinning boundary pixels to the original frame, absorbing
     # the mismatch as a smooth low-frequency correction. DIFFUERASER_BLEND=
     # feather selects the old Gaussian-ramp composite as a fallback.
+    # Diffusion output is also measurably softer than the source texture
+    # (stripe contrast ~15 vs ~19), so the masked area gets a mild unsharp
+    # boost before cloning (DIFFUERASER_SHARPEN, 0 disables).
     blend = os.environ.get("DIFFUERASER_BLEND", "poisson")
     feather = max(0, int(os.environ.get("PROPAINTER_FEATHER", "6")))
+    sharpen = float(os.environ.get("DIFFUERASER_SHARPEN", "0.6"))
     crop_h = y1 - y0
     for k in range(n):
         sub = load_frame(os.path.join(out_dir, produced[k]))
@@ -196,6 +200,13 @@ def main():
             sub = cv2.resize(sub, (w, crop_h), interpolation=cv2.INTER_LINEAR)
         base = frames[k][y0:y1, :]
         mk = np.where(masks[k][y0:y1, :] > 127, 255, 0).astype(np.uint8)
+        if sharpen > 0 and mk.any():
+            blur = cv2.GaussianBlur(sub, (0, 0), 1.2)
+            detail = sub.astype(np.float32) - blur.astype(np.float32)
+            a_s = (cv2.GaussianBlur(mk.astype(np.float32), (9, 9), 0)
+                   / 255.0)[..., None]
+            sub = np.clip(sub.astype(np.float32) + sharpen * detail * a_s,
+                          0, 255).astype(np.uint8)
         merged = None
         if blend == "poisson" and mk.any():
             ys, xs = np.nonzero(mk)
