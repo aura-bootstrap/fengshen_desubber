@@ -101,14 +101,17 @@ def main():
     pad = int(mh * 1.75 + 0.5)
     y0 = max(0, rows[0] - pad)
     y1 = min(h, rows[-1] + pad + 1)
-    # libx264 yuv420p mask video needs even height
-    if (y1 - y0) % 2:
-        if y1 < h:
-            y1 += 1
-        elif y0 > 0:
-            y0 -= 1
-        else:
-            y1 -= 1
+    # Crop height must be a multiple of 8: DiffuEraser rounds the processing
+    # size down to /8 and resamples (474 -> 472), which shifts the repaired
+    # patch sub-pixel-wise against the untouched frame at composite time.
+    rem = (y1 - y0) % 8
+    if rem:
+        grow = 8 - rem
+        up = min(grow, h - y1)
+        y1 += up
+        y0 = max(0, y0 - (grow - up))
+        if (y1 - y0) % 8:
+            y1 -= (y1 - y0) % 8
 
     work = os.path.join(args.out, ".work-diffueraser")
     shutil.rmtree(work, ignore_errors=True)
