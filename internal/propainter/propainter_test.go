@@ -2,7 +2,67 @@ package propainter
 
 import (
 	"testing"
+
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
 )
+
+// fullMask marks every pixel of a w×h frame masked.
+func fullMask(w, h int) mask.Frame {
+	bits := make([]uint8, w*h)
+	for i := range bits {
+		bits[i] = 1
+	}
+	return mask.Encode(bits, w, h)
+}
+
+// A flicker outlier with agreeing neighbours collapses to the median.
+func TestTemporalMedianSmoothsFlicker(t *testing.T) {
+	w, h := 2, 1
+	a := []byte{100, 100, 100, 50, 50, 50}
+	b := []byte{160, 160, 160, 50, 50, 50} // pixel 0 flickers bright
+	c := []byte{104, 104, 104, 50, 50, 50}
+	frames := [][]byte{a, b, c}
+	m := fullMask(w, h)
+	temporalMedian(frames, []mask.Frame{m, m, m}, w, h)
+	if got := b[0]; got != 104 {
+		t.Fatalf("flicker pixel = %d, want median 104", got)
+	}
+	if got := b[3]; got != 50 {
+		t.Fatalf("steady pixel = %d, want 50", got)
+	}
+}
+
+// Real motion (neighbours disagree beyond the gate) must survive untouched.
+func TestTemporalMedianKeepsMotion(t *testing.T) {
+	w, h := 1, 1
+	a := []byte{10, 0, 0}
+	b := []byte{80, 0, 0}
+	c := []byte{200, 0, 0}
+	frames := [][]byte{a, b, c}
+	m := fullMask(w, h)
+	temporalMedian(frames, []mask.Frame{m, m, m}, w, h)
+	if b[0] != 80 {
+		t.Fatalf("moving pixel = %d, want 80", b[0])
+	}
+}
+
+// Pixels outside the mask union are never touched.
+func TestTemporalMedianRespectsMask(t *testing.T) {
+	w, h := 2, 1
+	a := []byte{100, 0, 0, 100, 0, 0}
+	b := []byte{160, 0, 0, 160, 0, 0}
+	c := []byte{104, 0, 0, 104, 0, 0}
+	frames := [][]byte{a, b, c}
+	bits := []uint8{1, 0} // only pixel 0 masked
+	m := mask.Encode(bits, w, h)
+	temporalMedian(frames, []mask.Frame{m, m, m}, w, h)
+	if b[0] != 104 {
+		t.Fatalf("masked pixel = %d, want 104", b[0])
+	}
+	if b[3] != 160 {
+		t.Fatalf("unmasked pixel = %d, want 160", b[3])
+	}
+}
 
 func chunksString(cs [][2]int) string {
 	s := ""

@@ -112,6 +112,11 @@ def main():
     ap.add_argument("--start", type=int, required=True)
     ap.add_argument("--count", type=int, required=True)
     ap.add_argument("--fps", type=float, default=25.0)
+    # --carry DIR: repaired tail frames of the previous chunk, prepended to
+    # the input video with zero masks so the diffusion conditions on the
+    # previous chunk's actual output instead of drawing fresh texture
+    # (cross-chunk drift/flicker fix). Carry outputs are discarded.
+    ap.add_argument("--carry", default="")
     args = ap.parse_args()
 
     home = os.environ.get("DIFFUERASER_HOME", "")
@@ -137,6 +142,17 @@ def main():
         masks.append(m)
     h, w = frames[0].shape[:2]
 
+    ncarry = 0
+    if args.carry and os.path.isdir(args.carry):
+        carry = [load_frame(os.path.join(args.carry, f))
+                 for f in sorted(os.listdir(args.carry)) if f.endswith(".png")]
+        if carry:
+            if carry[0].shape[:2] != (h, w):
+                fail("carry frames shape mismatch with strip")
+            ncarry = len(carry)
+            frames = carry + frames
+            masks = [np.zeros((h, w), np.uint8)] * ncarry + masks
+
     # DiffuEraser rejects inputs shorter than 22 frames; pad by repeating the
     # last frame/mask. Padded outputs are discarded on composite.
     while len(frames) < 22:
@@ -152,7 +168,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     if len(rows) == 0:
         for k in range(n):
-            cv2.imwrite(os.path.join(args.out, "%05d.png" % (args.start + k)), frames[k])
+            cv2.imwrite(os.path.join(args.out, "%05d.png" % (args.start + k)), frames[ncarry + k])
         return
     mh = rows[-1] - rows[0] + 1
     pad = int(mh * 1.75 + 0.5)
@@ -234,8 +250,8 @@ def main():
     if ff.returncode != 0:
         fail(f"ffmpeg decode: {ff.stderr[-300:]}")
     produced = sorted(f for f in os.listdir(out_dir) if f.endswith(".png"))
-    if len(produced) < n:
-        fail(f"result has {len(produced)} frames, want {n}")
+    if len(produced) < ncarry + n:
+        fail(f"result has {len(produced)} frames, want {ncarry + n}")
 
     # Composite the diffusion crop back. Poisson (seamlessClone NORMAL_CLONE)
     # is the default: regenerated high-frequency texture (shirt stripes) never
@@ -263,15 +279,15 @@ def main():
     crop_h = y1 - y0
     sp_dx = sp_dy = 0
     if os.environ.get("DIFFUERASER_STRIPES", "1") != "0" and n > 0:
-        k0 = n // 2
+        k0 = ncarry + n // 2
         mk0 = np.where(masks[k0][y0:y1, :] > 127, 255, 0).astype(np.uint8)
         sp_dx, sp_dy = _stripe_shift(frames[k0][y0:y1, :], mk0)
     for k in range(n):
-        sub = load_frame(os.path.join(out_dir, produced[k]))
+        sub = load_frame(os.path.join(out_dir, produced[ncarry + k]))
         if sub.shape[0] != crop_h or sub.shape[1] != w:
             sub = cv2.resize(sub, (w, crop_h), interpolation=cv2.INTER_LINEAR)
-        base = frames[k][y0:y1, :]
-        mk = np.where(masks[k][y0:y1, :] > 127, 255, 0).astype(np.uint8)
+        base = frames[ncarry + k][y0:y1, :]
+        mk = np.where(masks[ncarry + k][y0:y1, :] > 127, 255, 0).astype(np.uint8)
         if sharpen > 0 and mk.any():
             blur = cv2.GaussianBlur(sub, (0, 0), 1.2)
             detail = sub.astype(np.float32) - blur.astype(np.float32)
@@ -342,7 +358,7 @@ def main():
                 merged = (merged.astype(np.float32) * (1 - alpha[..., None])
                           + clone2.astype(np.float32)
                           * alpha[..., None]).astype(np.uint8)
-        out = frames[k].copy()
+        out = frames[ncarry + k].copy()
         out[y0:y1, :] = merged
         cv2.imwrite(os.path.join(args.out, "%05d.png" % (args.start + k)), out)
 

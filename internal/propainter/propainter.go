@@ -15,12 +15,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aura-bootstrap/fengshen_desubber/internal/engine"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/ffx"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/imgx"
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
 )
 
 // Client implements engine.Painter against the sidecar script.
@@ -43,6 +45,12 @@ type Client struct {
 	// masks at export, covering glyph anti-aliasing and the dark subtitle
 	// outline around accepted cores (0: default 4).
 	TightDilate int
+	// Carry runs chunks strictly in order and hands each chunk the previous
+	// chunk's repaired overlap frames as clean reference context (DiffuEraser
+	// regenerates texture per chunk; conditioning on the previous chunk's
+	// actual output kills the cross-chunk style drift that linear cross-fade
+	// only blurs). DESUB_CHUNK_CARRY=0/1 overrides.
+	Carry bool
 }
 
 // NewClient checks the sidecar script exists and returns a client with the
@@ -57,7 +65,8 @@ func NewClient(script string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
-	return &Client{Script: script, Python: "python3", Timeout: timeout, ChunkSize: 64, Overlap: 12}, nil
+	return &Client{Script: script, Python: "python3", Timeout: timeout, ChunkSize: 64, Overlap: 12,
+		Carry: strings.Contains(strings.ToLower(filepath.Base(script)), "diffueraser")}, nil
 }
 
 // planChunks splits [startF, endF] into inference chunks of at most size
@@ -154,31 +163,55 @@ func (c *Client) Inpaint(j engine.PaintJob) ([][]byte, error) {
 	}
 
 	results := make([][][]byte, len(chunks))
-	k := c.Concurrency
-	if k < 1 {
-		k = 1
+	carry := c.Carry
+	if v := os.Getenv("DESUB_CHUNK_CARRY"); v != "" {
+		carry = v != "0"
 	}
-	sem := make(chan struct{}, k)
-	errs := make([]error, len(chunks))
-	var wg sync.WaitGroup
-	for i, ch := range chunks {
-		wg.Add(1)
-		go func(i int, ch [2]int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			frames, err := c.runChunk(jobDir, ch, j.FPS, j.StartF)
+	if carry && len(chunks) > 1 {
+		carryDir := filepath.Join(jobDir, "carry")
+		for i, ch := range chunks {
+			frames, err := c.runChunk(jobDir, ch, j.FPS, j.StartF, carryDir)
 			if err != nil {
-				errs[i] = err
-				return
+				return nil, err
 			}
 			results[i] = frames
-		}(i, ch)
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
+			if i+1 < len(chunks) && chunks[i+1][0] <= ch[1] {
+				// The next chunk shares the tail of this one: refresh the
+				// carry dir with this chunk's repaired overlap frames so the
+				// next inference conditions on them (mask = clean).
+				cnt := ch[1] - chunks[i+1][0] + 1
+				if err := refreshCarry(carryDir, chunkOutDir(jobDir, ch), ch[1]-cnt+1-j.StartF, cnt); err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else {
+		k := c.Concurrency
+		if k < 1 {
+			k = 1
+		}
+		sem := make(chan struct{}, k)
+		errs := make([]error, len(chunks))
+		var wg sync.WaitGroup
+		for i, ch := range chunks {
+			wg.Add(1)
+			go func(i int, ch [2]int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				frames, err := c.runChunk(jobDir, ch, j.FPS, j.StartF, "")
+				if err != nil {
+					errs[i] = err
+					return
+				}
+				results[i] = frames
+			}(i, ch)
+		}
+		wg.Wait()
+		for _, err := range errs {
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -221,26 +254,114 @@ func (c *Client) Inpaint(j engine.PaintJob) ([][]byte, error) {
 		}
 		out[i] = fr
 	}
+	if os.Getenv("DESUB_TEMPORAL_MEDIAN") != "0" {
+		temporalMedian(out, j.Masks, j.W, j.BandH)
+	}
 	return out, nil
+}
+
+func chunkOutDir(jobDir string, ch [2]int) string {
+	return filepath.Join(jobDir, fmt.Sprintf("out-%05d-%05d", ch[0], ch[1]))
+}
+
+// refreshCarry replaces the carry dir with count consecutive repaired frames
+// starting at relative index srcStart inside srcDir.
+func refreshCarry(carryDir, srcDir string, srcStart, count int) error {
+	if err := os.MkdirAll(carryDir, 0o755); err != nil {
+		return err
+	}
+	ents, err := os.ReadDir(carryDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if err := os.Remove(filepath.Join(carryDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	for k := 0; k < count; k++ {
+		b, err := os.ReadFile(filepath.Join(srcDir, frameName(srcStart+k)))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(carryDir, frameName(k)), b, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// temporalMedian replaces flicker outliers inside the repair mask by the
+// 3-frame median, gated on the two neighbours agreeing (|a-c| <= 30):
+// agreeing neighbours mark a stable region, so a deviating centre frame is
+// flicker from an independent diffusion draw; disagreeing neighbours mean
+// real motion and the centre value is kept.
+func temporalMedian(frames [][]byte, masks []mask.Frame, w, h int) {
+	n := len(frames)
+	if n < 3 || len(masks) != n {
+		return
+	}
+	const gate = 30
+	dPrev := make([]uint8, w*h)
+	dCur := make([]uint8, w*h)
+	dNext := make([]uint8, w*h)
+	masks[0].Decode(dPrev, w)
+	masks[1].Decode(dCur, w)
+	for k := 1; k < n-1; k++ {
+		masks[k+1].Decode(dNext, w)
+		prev, cur, next := frames[k-1], frames[k], frames[k+1]
+		for p := 0; p < w*h; p++ {
+			if dPrev[p]|dCur[p]|dNext[p] == 0 {
+				continue
+			}
+			q := p * 3
+			for ch := 0; ch < 3; ch++ {
+				a, b, c := int(prev[q+ch]), int(cur[q+ch]), int(next[q+ch])
+				lo, hi := a, c
+				if lo > hi {
+					lo, hi = hi, lo
+				}
+				if hi-lo > gate {
+					continue
+				}
+				mid := a + b + c - lo - hi
+				if b < lo {
+					mid = lo
+				} else if b > hi {
+					mid = hi
+				}
+				cur[q+ch] = byte(mid)
+			}
+		}
+		dPrev, dCur, dNext = dCur, dNext, dPrev
+	}
 }
 
 // runChunk executes the sidecar on one chunk and reads back its frames.
 // Strip/mask files are shared across chunks; each chunk gets its own output
 // directory and processes the frame range [ch0, ch1] (absolute numbers).
-func (c *Client) runChunk(jobDir string, ch [2]int, fps float64, jobStart int) ([][]byte, error) {
-	outDir := filepath.Join(jobDir, fmt.Sprintf("out-%05d-%05d", ch[0], ch[1]))
+// carryDir, when non-empty and populated, is handed to the sidecar via
+// --carry as clean reference context.
+func (c *Client) runChunk(jobDir string, ch [2]int, fps float64, jobStart int, carryDir string) ([][]byte, error) {
+	outDir := chunkOutDir(jobDir, ch)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, c.Python, c.Script,
+	args := []string{c.Script,
 		"--strip", filepath.Join(jobDir, "strip"),
 		"--masks", filepath.Join(jobDir, "masks"),
 		"--out", outDir,
 		"--start", fmt.Sprint(ch[0]-jobStart),
 		"--count", fmt.Sprint(ch[1]-ch[0]+1),
-		"--fps", fmt.Sprintf("%.6f", fps))
+		"--fps", fmt.Sprintf("%.6f", fps)}
+	if carryDir != "" {
+		if ents, _ := os.ReadDir(carryDir); len(ents) > 0 {
+			args = append(args, "--carry", carryDir)
+		}
+	}
+	cmd := exec.CommandContext(ctx, c.Python, args...)
 	var env []string
 	if c.Home != "" {
 		env = append(os.Environ(), "PROPAINTER_HOME="+c.Home)
