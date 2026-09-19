@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aura-bootstrap/fengshen_desubber/internal/mask"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/motion"
 )
 
@@ -293,5 +294,59 @@ func TestEncoderArgsCarryHDRProfile(t *testing.T) {
 	}
 	if hi < 0 || ci < 0 || hi > ci {
 		t.Fatalf("HDR params misplaced: x265-params@%d c:v@%d", hi, ci)
+	}
+}
+
+func TestMaskBBoxOverlap(t *testing.T) {
+	// One run at y=5, x=10..20.
+	bits := make([]uint8, 100*20)
+	for x := 10; x <= 20; x++ {
+		bits[5*100+x] = 1
+	}
+	m := mask.Encode(bits, 100, 20)
+	if !maskBBoxOverlap(m, 15, 0, 25, 10) {
+		t.Fatal("overlapping box rejected")
+	}
+	if maskBBoxOverlap(m, 30, 0, 40, 10) {
+		t.Fatal("x-disjoint box accepted")
+	}
+	if maskBBoxOverlap(m, 10, 6, 20, 9) {
+		t.Fatal("y-disjoint box accepted")
+	}
+	if maskBBoxOverlap(mask.Frame{}, 0, 0, 99, 19) {
+		t.Fatal("empty mask reported overlap")
+	}
+}
+
+func TestNewXShotPlanning(t *testing.T) {
+	// Single shot: no donors.
+	shotID := make([]int, 100)
+	if newXShot(TemporalOptions{}, shotID, 64, 16, 100) != nil {
+		t.Fatal("single shot yielded a donor cache")
+	}
+	// Two shots of 50: donor mids at (0+49)/2=24 and (50+99)/2=74.
+	for i := 50; i < 100; i++ {
+		shotID[i] = 1
+	}
+	xs := newXShot(TemporalOptions{}, shotID, 64, 16, 100)
+	if xs == nil || len(xs.shots) != 2 {
+		t.Fatalf("shots = %v, want 2", xs)
+	}
+	if xs.mids[0] != 24 || xs.mids[1] != 74 {
+		t.Fatalf("mids = %v", xs.mids)
+	}
+	// Many shots downsample to 8 donors.
+	shotID = make([]int, 200)
+	for i := range shotID {
+		shotID[i] = i / 10
+	}
+	xs = newXShot(TemporalOptions{}, shotID, 64, 16, 100)
+	if len(xs.shots) != 8 {
+		t.Fatalf("downsampled shots = %d, want 8", len(xs.shots))
+	}
+	for i := 1; i < len(xs.shots); i++ {
+		if xs.shots[i] <= xs.shots[i-1] {
+			t.Fatalf("shots not sorted: %v", xs.shots)
+		}
 	}
 }

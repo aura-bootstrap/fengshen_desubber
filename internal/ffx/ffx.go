@@ -363,6 +363,28 @@ func BytesPer(pixfmt string) int {
 	return 1
 }
 
+// GrabFrame decodes a single frame at time t through vf and returns it as
+// rawvideo (pixfmt, w×h).
+func GrabFrame(input string, t float64, vf string, w, h int, pixfmt string) ([]byte, error) {
+	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error",
+		"-ss", strconv.FormatFloat(t, 'f', 6, 64), "-i", input, "-an", "-sn", "-dn"}
+	if vf != "" {
+		args = append(args, "-vf", vf)
+	}
+	args = append(args, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", pixfmt, "pipe:1")
+	cmd := exec.Command(FFmpeg(), args...)
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg grab: %v: %s", err, strings.TrimSpace(errBuf.String()))
+	}
+	if want := w * h * BytesPer(pixfmt); len(out) != want {
+		return nil, fmt.Errorf("ffmpeg grab: got %d bytes, want %d", len(out), want)
+	}
+	return out, nil
+}
+
 // FrameReader streams raw frames out of ffmpeg's stdout.
 type FrameReader struct {
 	cmd    *exec.Cmd

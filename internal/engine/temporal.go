@@ -232,6 +232,11 @@ func runCore(o TemporalOptions, painted map[int][]byte) error {
 	}
 	motionOn := o.Motion && len(pairs) > 0
 
+	var xs *xshotCache
+	if os.Getenv("DESUB_XSHOT") != "0" {
+		xs = newXShot(o, shotID, w, hb, by)
+	}
+
 	enc, err := ffx.NewEncoder(temporalEncoderArgs(o, w, hb, by))
 	if err != nil {
 		return err
@@ -370,6 +375,11 @@ func runCore(o TemporalOptions, painted map[int][]byte) error {
 						}
 					}
 				}
+			}
+			if len(idx) > 0 && xs != nil {
+				var nX int
+				idx, nX = xs.fill(fill, shotID[i], repBits, idx, w, hb)
+				nReal += nX
 			}
 			if len(idx) > 0 {
 				diffuse(fill, w, hb, idx, 64)
@@ -1021,4 +1031,170 @@ func clamp8(v float64) uint8 {
 		return 255
 	}
 	return uint8(v + 0.5)
+}
+
+// xshotCache plans and caches cross-shot donor frames. When a shot's own
+// frames cannot supply real pixels for the whole masked area (the subtitle
+// covers it for the shot's entire duration), donors from other shots
+// revisiting the same background fill the remainder instead of diffusing.
+// Two guards keep foreign content out: a donor shot whose own mask bbox
+// intersects the leftover bbox is skipped (its frame may carry the same
+// subtitle), and the donor is accepted only when its pixels around the
+// leftover region match the current frame (ring SAD gate).
+type xshotCache struct {
+	o      TemporalOptions
+	vf     string
+	w, hb  int
+	shots  []int       // sorted shot IDs
+	mids   map[int]int // shot ID -> donor frame index (shot middle)
+	frames map[int][]byte
+}
+
+func newXShot(o TemporalOptions, shotID []int, w, hb, by int) *xshotCache {
+	first := map[int]int{}
+	last := map[int]int{}
+	for i, s := range shotID {
+		if _, ok := first[s]; !ok {
+			first[s] = i
+		}
+		last[s] = i
+	}
+	if len(first) < 2 {
+		return nil
+	}
+	shots := make([]int, 0, len(first))
+	for s := range first {
+		shots = append(shots, s)
+	}
+	sort.Ints(shots)
+	if len(shots) > 8 {
+		// Evenly downsample to 8 donor shots.
+		pick := make([]int, 0, 8)
+		for k := 0; k < 8; k++ {
+			pick = append(pick, shots[k*(len(shots)-1)/7])
+		}
+		shots = pick
+	}
+	mids := make(map[int]int, len(shots))
+	for _, s := range shots {
+		mids[s] = (first[s] + last[s]) / 2
+	}
+	return &xshotCache{
+		o: o, w: w, hb: hb, shots: shots, mids: mids,
+		vf:     fmt.Sprintf("crop=%d:%d:0:%d,format=rgb24", w, hb, by),
+		frames: map[int][]byte{},
+	}
+}
+
+func (xs *xshotCache) donor(shot int) []byte {
+	if fr, ok := xs.frames[shot]; ok {
+		return fr
+	}
+	raw, err := ffx.GrabFrame(xs.o.Input, float64(xs.mids[shot])/xs.o.FPS, xs.vf, xs.w, xs.hb, "rgb24")
+	if err != nil {
+		xs.frames[shot] = nil
+		return nil
+	}
+	xs.frames[shot] = raw
+	return raw
+}
+
+// fill copies leftover masked pixels from the best-matching cross-shot
+// donor. Returns the still-unfilled pixel list and the number copied.
+func (xs *xshotCache) fill(fill []byte, curShot int, repBits []uint8, idx []int32, w, hb int) ([]int32, int) {
+	n := w * hb
+	left := make([]uint8, n)
+	const big = 1 << 30
+	minX, minY, maxX, maxY := big, big, -1, -1
+	for _, ip := range idx {
+		p := int(ip)
+		left[p] = 1
+		x, y := p%w, p/w
+		if x < minX {
+			minX = x
+		}
+		if x > maxX {
+			maxX = x
+		}
+		if y < minY {
+			minY = y
+		}
+		if y > maxY {
+			maxY = y
+		}
+	}
+	if maxX < 0 {
+		return idx, 0
+	}
+	ring := make([]uint8, n)
+	imgx.MorphBin(left, ring, w, hb, 17, 17, true)
+	nRing := 0
+	for p := 0; p < n; p++ {
+		if repBits[p] != 0 || left[p] != 0 {
+			ring[p] = 0
+		}
+		if ring[p] != 0 {
+			nRing++
+		}
+	}
+	if nRing == 0 {
+		return idx, 0
+	}
+	gate := 14.0
+	if v, err := strconv.ParseFloat(os.Getenv("DESUB_XSHOT_GATE"), 64); err == nil && v > 0 {
+		gate = v
+	}
+	bestSAD := math.MaxFloat64
+	var best []byte
+	for _, shot := range xs.shots {
+		if shot == curShot {
+			continue
+		}
+		if maskBBoxOverlap(xs.o.Masks[xs.mids[shot]], minX-8, minY-8, maxX+8, maxY+8) {
+			continue
+		}
+		d := xs.donor(shot)
+		if d == nil {
+			continue
+		}
+		var sad float64
+		for p := 0; p < n; p++ {
+			if ring[p] == 0 {
+				continue
+			}
+			q := p * 3
+			for c := 0; c < 3; c++ {
+				dv := int(fill[q+c]) - int(d[q+c])
+				if dv < 0 {
+					dv = -dv
+				}
+				sad += float64(dv)
+			}
+		}
+		if sad/float64(nRing*3) < bestSAD {
+			bestSAD, best = sad/float64(nRing*3), d
+		}
+	}
+	if best == nil || bestSAD > gate {
+		return idx, 0
+	}
+	for _, ip := range idx {
+		q := int(ip) * 3
+		fill[q] = best[q]
+		fill[q+1] = best[q+1]
+		fill[q+2] = best[q+2]
+	}
+	return idx[:0], len(idx)
+}
+
+// maskBBoxOverlap reports whether the mask's bbox intersects
+// (x0,y0)-(x1,y1), reading the RLE triples directly.
+func maskBBoxOverlap(m mask.Frame, x0, y0, x1, y1 int) bool {
+	for k := 0; k+2 < len(m.RLE); k += 3 {
+		y, mx0, mx1 := int(m.RLE[k]), int(m.RLE[k+1]), int(m.RLE[k+2])
+		if y >= y0 && y <= y1 && mx1 >= x0 && mx0 <= x1 {
+			return true
+		}
+	}
+	return false
 }
