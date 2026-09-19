@@ -1,3 +1,4 @@
 bin/
 .kiro/
 dev_client/backend/bin/
+__pycache__/
