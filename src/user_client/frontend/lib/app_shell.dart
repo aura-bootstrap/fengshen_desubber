@@ -24,14 +24,10 @@ class AppShell extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: [t.brandA, t.brandB]),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.subtitles_off, size: 18, color: Colors.white),
+                // 品牌 LOGO:与程序图标同一图(assets/logo.png = app_icon.ico 源)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset('assets/logo.png', width: 30, height: 30),
                 ),
                 const SizedBox(width: 10),
                 const Text('峰神·去字幕',
