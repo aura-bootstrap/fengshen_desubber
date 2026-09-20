@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
@@ -24,10 +25,14 @@ class AppShell extends StatelessWidget {
             ),
             child: Row(
               children: [
-                // 品牌 LOGO:与程序图标同一图(assets/logo.png = app_icon.ico 源)
+                // 品牌 LOGO:与程序图标同一图(dev 构建绿色,Release 蓝色,见 Runner.rc)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image.asset('assets/logo.png', width: 30, height: 30),
+                  child: Image.asset(
+                    kReleaseMode ? 'assets/logo.png' : 'assets/logo_green.png',
+                    width: 30,
+                    height: 30,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 const Text('峰神·去字幕',

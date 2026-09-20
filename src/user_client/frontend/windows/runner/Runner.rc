@@ -52,7 +52,12 @@ END
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
+// dev(Debug/Profile)构建用绿色图标,与界面内 LOGO 一致;Release 用蓝色。
+#ifdef APP_ICON_DEV
+IDI_APP_ICON            ICON                    "resources\\app_icon_dev.ico"
+#else
 IDI_APP_ICON            ICON                    "resources\\app_icon.ico"
+#endif
 
 
 /////////////////////////////////////////////////////////////////////////////

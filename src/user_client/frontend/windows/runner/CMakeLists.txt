@@ -20,6 +20,10 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
+# dev 构建(Debug/Profile)给资源编译器下 APP_ICON_DEV 定义,Runner.rc 据此切绿色图标。
+set_property(SOURCE "Runner.rc" PROPERTY COMPILE_OPTIONS
+  "$<$<CONFIG:Debug>:/dAPP_ICON_DEV>" "$<$<CONFIG:Profile>:/dAPP_ICON_DEV>")
+
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")

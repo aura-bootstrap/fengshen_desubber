@@ -23,3 +23,5 @@ flutter:
   assets:
     - assets/logo.png
     - assets/logo_64.png
+    - assets/logo_green.png
+    - assets/logo_green_64.png
