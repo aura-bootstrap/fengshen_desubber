@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'api.dart';
+import 'error_widget_capture.dart';
 import 'pages/audit_page.dart';
 import 'pages/cards_page.dart';
 import 'pages/tx_page.dart';
 import 'theme.dart';
+import 'window_frame.dart';
 
 /// 应用版本号(侧栏展示;发版时与 pubspec version 同步)。
 const kAppVersion = '1.0.0';
@@ -12,7 +15,10 @@ const kAppVersion = '1.0.0';
 /// 管理版标识(三端统一命名:开发版/用户版/管理版)。
 const kAppEdition = '管理版';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  installErrorWidgetCapture();
+  await initAdminWindow();
   runApp(const AdminApp());
 }
 
@@ -24,8 +30,19 @@ class AdminApp extends StatelessWidget {
     return MaterialApp(
       title: '峰神·去字幕(管理版)',
       debugShowCheckedModeBanner: false,
+      // 日期选择器等 Material 控件全中文(不跟随系统语言)
+      locale: const Locale('zh', 'CN'),
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
       theme: buildAppTheme(),
       darkTheme: buildAppDarkTheme(),
+      // 自绘窗口框(隐藏原生标题栏后统一接管),对所有路由生效
+      builder: (context, child) =>
+          AdminWindowFrame(child: child ?? const SizedBox.shrink()),
       home: const LoginPage(),
     );
   }

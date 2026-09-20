@@ -2,55 +2,60 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import '../responsive.dart';
 import '../theme.dart';
+import '../widgets/top_toast.dart';
 import 'new_task_dialog.dart';
-import 'task_detail_page.dart';
 
 class TasksPage extends StatelessWidget {
   final AppState state;
-  const TasksPage({super.key, required this.state});
+  final ValueChanged<int> onOpenDetail;
+  const TasksPage({super.key, required this.state, required this.onOpenDetail});
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return ListenableBuilder(
-      listenable: state,
-      builder: (context, _) {
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Row(
-                children: [
-                  Text('任务', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: t.ink)),
-                  const SizedBox(width: 8),
-                  Text('${state.tasks.length}', style: TextStyle(fontSize: 13, color: t.faint)),
-                  const Spacer(),
-                  FilledButton.icon(
-                    onPressed: state.engineReady
-                        ? () => showNewTaskDialog(context, state)
-                        : null,
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('新建任务'),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: state.tasks.isEmpty
-                  ? Center(
-                      child: Text('暂无任务,点右上角「新建任务」选择视频开始',
-                          style: TextStyle(color: t.faint)))
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-                      itemCount: state.tasks.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 10),
-                      itemBuilder: (context, i) => TaskCard(task: state.tasks[i], state: state),
+    return CenteredContent(
+      child: ListenableBuilder(
+        listenable: state,
+        builder: (context, _) {
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Row(
+                  children: [
+                    Text('任务', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: t.ink)),
+                    const SizedBox(width: 8),
+                    Text('${state.tasks.length}', style: TextStyle(fontSize: 13, color: t.faint)),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: state.engineReady
+                          ? () => showNewTaskDialog(context, state)
+                          : null,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('新建任务'),
                     ),
-            ),
-          ],
-        );
-      },
+                  ],
+                ),
+              ),
+              Expanded(
+                child: state.tasks.isEmpty
+                    ? Center(
+                        child: Text('暂无任务,点右上角「新建任务」选择视频开始',
+                            style: TextStyle(color: t.faint)))
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                        itemCount: state.tasks.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 10),
+                        itemBuilder: (context, i) => TaskCard(
+                            task: state.tasks[i], state: state, onOpenDetail: onOpenDetail),
+                      ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -58,7 +63,8 @@ class TasksPage extends StatelessWidget {
 class TaskCard extends StatelessWidget {
   final DesubTask task;
   final AppState state;
-  const TaskCard({super.key, required this.task, required this.state});
+  final ValueChanged<int> onOpenDetail;
+  const TaskCard({super.key, required this.task, required this.state, required this.onOpenDetail});
 
   @override
   Widget build(BuildContext context) {
@@ -156,9 +162,7 @@ class TaskCard extends StatelessWidget {
                   ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => TaskDetailPage(taskId: task.id, state: state)),
-                  ),
+                  onPressed: () => onOpenDetail(task.id),
                   icon: const Icon(Icons.notes, size: 16),
                   label: const Text('详情'),
                 ),
@@ -199,7 +203,7 @@ class TaskCard extends StatelessWidget {
   Future<void> _act(BuildContext context, Future<String?> Function() op) async {
     final err = await op();
     if (err != null && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      TopToast.show(context, err, error: true);
     }
   }
 

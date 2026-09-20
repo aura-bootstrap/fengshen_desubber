@@ -5,16 +5,20 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app_shell.dart';
 import 'app_state.dart';
+import 'error_widget_capture.dart';
 import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installErrorWidgetCapture();
   await windowManager.ensureInitialized();
   const opts = WindowOptions(
     size: Size(1180, 760),
     minimumSize: Size(960, 620),
     title: '峰神·去字幕',
-    titleBarStyle: TitleBarStyle.normal,
+    // 隐藏原生标题栏(主题融合由 AppShell 的自定义标题栏接管)
+    titleBarStyle: TitleBarStyle.hidden,
+    windowButtonVisibility: false,
   );
   unawaitedWindow(opts);
 

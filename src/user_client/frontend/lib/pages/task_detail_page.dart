@@ -5,13 +5,18 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import '../responsive.dart';
 import '../theme.dart';
+import '../widgets/top_toast.dart';
 
 /// 任务详情:阶段时间线 + 滚动日志 + 报告摘要。
+/// 嵌在 AppShell 内(非路由),标题栏/状态栏保持可见;onBack 返回列表。
 class TaskDetailPage extends StatefulWidget {
   final int taskId;
   final AppState state;
-  const TaskDetailPage({super.key, required this.taskId, required this.state});
+  final VoidCallback onBack;
+  const TaskDetailPage(
+      {super.key, required this.taskId, required this.state, required this.onBack});
 
   @override
   State<TaskDetailPage> createState() => _TaskDetailPageState();
@@ -50,23 +55,48 @@ class _TaskDetailPageState extends State<TaskDetailPage> {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final tk = task;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(tk == null ? '任务 #${widget.taskId}' : '任务 #${tk.id}「${tk.name}」'),
-        backgroundColor: t.surface,
-      ),
-      body: tk == null
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(20),
+    return CenteredContent(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 20, 6),
+            child: Row(
               children: [
-                StageTimeline(task: tk),
-                const SizedBox(height: 16),
-                if (tk.reportJson.isNotEmpty) ReportCard(reportJson: tk.reportJson),
-                if (tk.reportJson.isNotEmpty) const SizedBox(height: 16),
-                LogConsole(logs: widget.state.logs[widget.taskId] ?? const [], ctrl: logCtrl),
+                IconButton(
+                  tooltip: '返回列表',
+                  icon: Icon(Icons.arrow_back, size: 19, color: t.dim),
+                  onPressed: widget.onBack,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    tk == null ? '任务 #${widget.taskId}' : '任务 #${tk.id}「${tk.name}」',
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w700, color: t.ink),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
+          ),
+          Expanded(
+            child: tk == null
+                ? const Center(child: CircularProgressIndicator())
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                    children: [
+                      StageTimeline(task: tk),
+                      const SizedBox(height: 16),
+                      if (tk.reportJson.isNotEmpty) ReportCard(reportJson: tk.reportJson),
+                      if (tk.reportJson.isNotEmpty) const SizedBox(height: 16),
+                      LogConsole(
+                          logs: widget.state.logs[widget.taskId] ?? const [],
+                          ctrl: logCtrl),
+                    ],
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -171,8 +201,7 @@ class ReportCard extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: reportJson));
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('报告 JSON 已复制')));
+                TopToast.show(context, '报告 JSON 已复制');
               },
               icon: const Icon(Icons.copy, size: 16),
               label: const Text('复制报告'),

@@ -11,7 +11,7 @@ void main() {
     final state = AppState();
     await tester.pumpWidget(MaterialApp(
       theme: buildAppTheme(),
-      home: Scaffold(body: TasksPage(state: state)),
+      home: Scaffold(body: TasksPage(state: state, onOpenDetail: (_) {})),
     ));
     expect(find.text('任务'), findsOneWidget);
     expect(find.text('新建任务'), findsOneWidget);

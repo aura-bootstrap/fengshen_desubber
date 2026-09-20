@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../api.dart';
 import '../theme.dart';
+import '../widgets/top_toast.dart';
 
 String fmtTs(int unix) {
   if (unix == 0) return '';
@@ -57,13 +58,11 @@ class _CardsPageState extends State<CardsPage> {
     try {
       await op();
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(okMsg)));
+      TopToast.show(context, okMsg);
       _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$e')));
+      TopToast.show(context, '$e', error: true);
     }
   }
 
@@ -261,7 +260,6 @@ class _CardsPageState extends State<CardsPage> {
               final cr = int.tryParse(credits.text) ?? -1;
               if (n <= 0 || n > 1000 || cr < 0) return;
               Navigator.pop(ctx);
-              final messenger = ScaffoldMessenger.of(context);
               try {
                 final cards = await widget.api
                     .generate(n, cr, batch.text.trim(), name.text.trim());
@@ -269,7 +267,8 @@ class _CardsPageState extends State<CardsPage> {
                 _issuedDialog(cards);
                 _load();
               } catch (e) {
-                messenger.showSnackBar(SnackBar(content: Text('$e')));
+                if (!context.mounted) return;
+                TopToast.show(context, '$e', error: true);
               }
             },
             child: const Text('生成'),
@@ -297,8 +296,7 @@ class _CardsPageState extends State<CardsPage> {
           TextButton(
             onPressed: () {
               Clipboard.setData(ClipboardData(text: text));
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(const SnackBar(content: Text('已复制全部卡面')));
+              TopToast.show(context, '已复制全部卡面');
             },
             child: const Text('复制全部'),
           ),
@@ -334,17 +332,20 @@ class _CardsPageState extends State<CardsPage> {
           TextButton(
               onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               final cr = int.tryParse(credits.text) ?? 0;
               if (card.text.trim().isEmpty || cr <= 0) return;
               Navigator.pop(ctx);
-              final messenger = ScaffoldMessenger.of(context);
-              _run(() async {
+              try {
                 final bal =
                     await widget.api.recharge(card.text.trim(), cr);
-                messenger.showSnackBar(
-                    SnackBar(content: Text('充值后余额 $bal')));
-              }, '已充值');
+                if (!context.mounted) return;
+                TopToast.show(context, '充值后余额 $bal');
+                _load();
+              } catch (e) {
+                if (!context.mounted) return;
+                TopToast.show(context, '$e', error: true);
+              }
             },
             child: const Text('充值'),
           ),
@@ -433,8 +434,7 @@ class _CardsPageState extends State<CardsPage> {
               } catch (e) {
                 if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text('$e')));
+                TopToast.show(context, '$e', error: true);
               }
             },
             child: const Text('查询'),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../theme.dart';
 import 'cardkey_activate_dialog.dart';
+import 'top_toast.dart';
 
 /// 侧边栏左下角授权卡片(卡密点数版,仿切片生成器 LicenseCard):
 /// 未激活=「立即激活」引导;已激活=剩余点数(大数字)/卡号/服务器三行。
@@ -14,8 +15,7 @@ class LicenseCard extends StatelessWidget {
   Future<void> _activate(BuildContext context) async {
     final ok = await showCardKeyActivateDialog(context, state);
     if (ok == true && state.cardKey?.activated == true && context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('卡密激活成功')));
+      TopToast.show(context, '卡密激活成功');
     }
   }
 

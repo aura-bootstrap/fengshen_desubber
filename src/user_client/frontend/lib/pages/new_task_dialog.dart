@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../theme.dart';
 import '../widgets/cardkey_activate_dialog.dart';
 import '../widgets/styled_dropdown.dart';
+import '../widgets/top_toast.dart';
 
 /// 新建任务向导:选视频 + 参数快照 + 是否立即运行。
 Future<void> showNewTaskDialog(BuildContext context, AppState state) {
@@ -92,11 +93,14 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
         runNow: runNow,
       );
       await widget.state.refresh();
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+        TopToast.show(context, '任务「${nameCtrl.text.trim()}」已创建');
+        Navigator.of(context).pop();
+      }
     } catch (e) {
       if (mounted) {
         setState(() => busy = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        TopToast.show(context, '$e', error: true);
       }
     }
   }
@@ -327,8 +331,7 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
       await widget.state.deactivateCardKey();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+        TopToast.show(context, '$e', error: true);
       }
     }
   }
