@@ -28,7 +28,7 @@ var (
 )
 
 // MachineID 采集机器码:物理网卡 MAC 按字节升序取首个 + 系统盘所在物理盘序列号,
-// 拼合后 SHA-256(hex 64 字符,大写)。
+// 拼合后 SHA-256(hex 64 字符,小写,与服务端 validMachineHash 校验口径一致)。
 // 降级:物理盘序列号取不到时仅按 MAC 取哈希并置 degraded=true(服务端按同样规则比对,
 // 降级机器码与完整机器码不同——同一台机器两次采集方式须一致)。
 func MachineID() (hash string, degraded bool, err error) {
@@ -39,10 +39,10 @@ func MachineID() (hash string, degraded bool, err error) {
 	serial, serr := diskSerialFunc()
 	if serr != nil || strings.TrimSpace(serial) == "" {
 		sum := sha256.Sum256([]byte(mac + "|degraded"))
-		return strings.ToUpper(hex.EncodeToString(sum[:])), true, nil
+		return hex.EncodeToString(sum[:]), true, nil
 	}
 	sum := sha256.Sum256([]byte(mac + "|" + strings.TrimSpace(serial)))
-	return strings.ToUpper(hex.EncodeToString(sum[:])), false, nil
+	return hex.EncodeToString(sum[:]), false, nil
 }
 
 // firstPhysicalMAC 枚举网卡:剔除回环/无 MAC/黑名单虚拟网卡后,
