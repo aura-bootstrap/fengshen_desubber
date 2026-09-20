@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api.dart';
+import '../theme.dart';
 
 String fmtTs(int unix) {
   if (unix == 0) return '';
@@ -29,6 +30,12 @@ class _CardsPageState extends State<CardsPage> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _batch.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -62,32 +69,38 @@ class _CardsPageState extends State<CardsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            SizedBox(
-              width: 180,
-              child: TextField(
-                controller: _batch,
-                style: const TextStyle(fontSize: 13),
-                decoration: const InputDecoration(
-                    labelText: '批次过滤(空=全部)',
-                    border: OutlineInputBorder(),
-                    isDense: true),
-                onSubmitted: (_) => _load(),
-              ),
-            ),
-            FilledButton.tonalIcon(
+          Row(children: [
+            Text('卡密',
+                style: TextStyle(
+                    fontSize: 21, fontWeight: FontWeight.w700, color: t.ink)),
+            const Spacer(),
+            OutlinedButton.icon(
                 onPressed: _busy ? null : _load,
-                icon: const Icon(Icons.refresh, size: 16),
+                icon: const Icon(Icons.refresh, size: 15),
                 label: const Text('刷新')),
+            const SizedBox(width: 10),
             FilledButton.icon(
                 onPressed: () => _generateDialog(context),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('发卡')),
+          ]),
+          const SizedBox(height: 14),
+          Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            SizedBox(
+              width: 180,
+              child: TextField(
+                controller: _batch,
+                style: TextStyle(fontSize: 13, color: t.ink),
+                decoration: const InputDecoration(labelText: '批次过滤(空=全部)'),
+                onSubmitted: (_) => _load(),
+              ),
+            ),
             OutlinedButton(
                 onPressed: () => _rechargeDialog(context),
                 child: const Text('充值')),
@@ -101,55 +114,85 @@ class _CardsPageState extends State<CardsPage> {
                 onPressed: () => _queryDialog(context),
                 child: const Text('卡状态查询')),
           ]),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           if (_error.isNotEmpty)
-            Text(_error, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: t.dangerSoft,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(_error,
+                  style: TextStyle(fontSize: 12.5, color: t.danger)),
+            ),
           Expanded(
             child: _cards == null
                 ? const Center(child: CircularProgressIndicator())
                 : _cards!.isEmpty
-                    ? const Center(child: Text('无卡'))
-                    : SingleChildScrollView(
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: DataTable(
-                            columns: const [
-                              DataColumn(label: Text('ID')),
-                              DataColumn(label: Text('名称')),
-                              DataColumn(label: Text('卡面(脱敏)')),
-                              DataColumn(label: Text('批次')),
-                              DataColumn(label: Text('余额')),
-                              DataColumn(label: Text('状态')),
-                              DataColumn(label: Text('创建时间')),
-                              DataColumn(label: Text('操作')),
-                            ],
-                            rows: [
-                              for (final c in _cards!)
-                                DataRow(cells: [
-                                  DataCell(Text('${c.id}')),
-                                  DataCell(Text(c.name)),
-                                  DataCell(Text(c.codeMasked,
-                                      style: const TextStyle(fontFamily: 'monospace'))),
-                                  DataCell(Text(c.batch)),
-                                  DataCell(Text('${c.balance}')),
-                                  DataCell(_StatusChip(status: c.status)),
-                                  DataCell(Text(fmtTs(c.createdAt))),
-                                  DataCell(Row(children: [
-                                    TextButton(
-                                        onPressed: c.status == 'revoked'
-                                            ? null
-                                            : () => _confirm(
-                                                '解绑卡 #${c.id}?',
-                                                () => _run(
-                                                    () => widget.api.unbind(cardId: c.id),
-                                                    '已解绑')),
-                                        child: const Text('解绑')),
-                                    TextButton(
-                                        onPressed: () => widget.onShowTx(c.id),
-                                        child: const Text('流水')),
-                                  ])),
-                                ]),
-                            ],
+                    ? Card(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 48),
+                          child: Center(
+                              child: Text('无卡',
+                                  style: TextStyle(fontSize: 13, color: t.faint))),
+                        ),
+                      )
+                    : Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: LayoutBuilder(
+                          // 表宽撑满卡片;列总宽超出时横向滚动,不裁操作列
+                          builder: (context, bc) => SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: ConstrainedBox(
+                              constraints:
+                                  BoxConstraints(minWidth: bc.maxWidth),
+                              child: SingleChildScrollView(
+                                child: DataTable(
+                              // 压缩默认列距(56/24),1280 宽窗口下 8 列刚好铺满不滚动
+                              columnSpacing: 28,
+                              horizontalMargin: 16,
+                              columns: const [
+                                DataColumn(label: Text('ID')),
+                                DataColumn(label: Text('名称')),
+                                DataColumn(label: Text('卡面(脱敏)')),
+                                DataColumn(label: Text('批次')),
+                                DataColumn(label: Text('余额')),
+                                DataColumn(label: Text('状态')),
+                                DataColumn(label: Text('创建时间')),
+                                DataColumn(label: Text('操作')),
+                              ],
+                              rows: [
+                                for (final c in _cards!)
+                                  DataRow(cells: [
+                                    DataCell(Text('${c.id}')),
+                                    DataCell(Text(c.name)),
+                                    DataCell(Text(c.codeMasked,
+                                        style: const TextStyle(
+                                            fontFamily: AppConst.fontMono))),
+                                    DataCell(Text(c.batch)),
+                                    DataCell(Text('${c.balance}')),
+                                    DataCell(_StatusChip(status: c.status)),
+                                    DataCell(Text(fmtTs(c.createdAt))),
+                                    DataCell(Row(children: [
+                                      TextButton(
+                                          onPressed: c.status == 'revoked'
+                                              ? null
+                                              : () => _confirm(
+                                                  '解绑卡 #${c.id}?',
+                                                  () => _run(
+                                                      () => widget.api.unbind(cardId: c.id),
+                                                      '已解绑')),
+                                          child: const Text('解绑')),
+                                      TextButton(
+                                          onPressed: () => widget.onShowTx(c.id),
+                                          child: const Text('流水')),
+                                    ])),
+                                  ]),
+                              ],
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -194,13 +237,16 @@ class _CardsPageState extends State<CardsPage> {
                 controller: count,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(labelText: '数量(1-1000)')),
+            const SizedBox(height: 12),
             TextField(
                 controller: credits,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(labelText: '每张点数')),
+            const SizedBox(height: 12),
             TextField(
                 controller: batch,
                 decoration: const InputDecoration(labelText: '批次(可空)')),
+            const SizedBox(height: 12),
             TextField(
                 controller: name,
                 decoration: const InputDecoration(labelText: '名称(可空)')),
@@ -243,7 +289,8 @@ class _CardsPageState extends State<CardsPage> {
           width: 420,
           child: SingleChildScrollView(
             child: SelectableText(text,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
+                style: const TextStyle(
+                    fontFamily: AppConst.fontMono, fontSize: 13)),
           ),
         ),
         actions: [
@@ -274,8 +321,9 @@ class _CardsPageState extends State<CardsPage> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
                 controller: card,
-                style: const TextStyle(fontFamily: 'monospace'),
+                style: const TextStyle(fontFamily: AppConst.fontMono),
                 decoration: const InputDecoration(labelText: '卡面(明文)')),
+            const SizedBox(height: 12),
             TextField(
                 controller: credits,
                 keyboardType: TextInputType.number,
@@ -318,8 +366,9 @@ class _CardsPageState extends State<CardsPage> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
                 controller: card,
-                style: const TextStyle(fontFamily: 'monospace'),
+                style: const TextStyle(fontFamily: AppConst.fontMono),
                 decoration: const InputDecoration(labelText: '卡面(明文,优先)')),
+            const SizedBox(height: 12),
             TextField(
                 controller: batch,
                 decoration: const InputDecoration(labelText: '批次(卡面为空时整批)')),
@@ -355,7 +404,7 @@ class _CardsPageState extends State<CardsPage> {
           child: TextField(
               controller: card,
               autofocus: true,
-              style: const TextStyle(fontFamily: 'monospace'),
+              style: const TextStyle(fontFamily: AppConst.fontMono),
               decoration: const InputDecoration(labelText: '卡面(明文)')),
         ),
         actions: [
@@ -402,11 +451,12 @@ class _StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
     final (label, color) = switch (status) {
-      'active' => ('已激活', Colors.green),
-      'inactive' => ('未激活', Colors.grey),
-      'revoked' => ('已吊销', Colors.red),
-      _ => (status, Colors.blueGrey),
+      'active' => ('已激活', t.success),
+      'inactive' => ('未激活', t.faint),
+      'revoked' => ('已吊销', t.danger),
+      _ => (status, t.violet),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
