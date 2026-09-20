@@ -58,6 +58,8 @@ class AppState extends ChangeNotifier {
       print('[boot] engine ready at ${client.baseUrl}');
       engineReady = true;
       await refresh();
+      // 侧栏授权卡片常驻,启动即拉一次卡密状态(未激活/失败都会在卡片上呈现)。
+      await refreshCardKey();
       _sub = client.events().listen(_onEvent, onError: (_) {});
       notifyListeners();
     } catch (e) {
