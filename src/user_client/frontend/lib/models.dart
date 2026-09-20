@@ -6,7 +6,7 @@ class DesubTask {
   final String outName;
   final String paramsJson;
   final String status; // pending|queued|running|succeeded|failed|stopped
-  final String stage; // probe|cuts|detect|repair|engine|verify
+  final String stage; // 本地: probe|cuts|detect|repair|engine|verify;在线: upload|cloud|download
   final int done;
   final int total;
   final String workDir;
@@ -51,25 +51,50 @@ class DesubTask {
 
   bool get active => status == 'running' || status == 'queued';
 
-  double get progress {
+  /// 在线任务(params 快照 online:true)走云端三阶段,否则本地六阶段管线。
+  bool get isOnline => paramsJson.contains('"online":true');
+
+  static const localStages = ['probe', 'cuts', 'detect', 'repair', 'engine', 'verify'];
+  static const onlineStages = ['upload', 'cloud', 'download'];
+  List<String> get stages => isOnline ? onlineStages : localStages;
+
+  /// 阶段序列中的位置,用于阶段时间线;-1 = 尚未进入任何阶段。
+  int get stageIndex => stages.indexOf(stage);
+
+  /// 当前阶段内进度(0..1):repair 是帧计数,upload/download 是字节计数,
+  /// 无计数的阶段(probe/cuts/cloud 等)在进行中按 0 计,过后由阶段位置推进。
+  double get stageFraction {
     if (status == 'succeeded') return 1;
     if (total <= 0) return 0;
     return (done / total).clamp(0.0, 1.0);
   }
 
-  /// 阶段序列中的位置(0..5),用于阶段时间线。
-  static const stageOrder = ['probe', 'cuts', 'detect', 'repair', 'engine', 'verify'];
-  int get stageIndex => stageOrder.indexOf(stage);
+  /// 总进度 = (已过阶段数 + 当前阶段内进度) / 阶段总数,每个阶段都有百分比。
+  double get progress {
+    if (status == 'succeeded') return 1;
+    final i = stageIndex;
+    if (i < 0) return 0;
+    return ((i + stageFraction) / stages.length).clamp(0.0, 1.0);
+  }
 
-  String get stageLabel => switch (stage) {
+  static String labelOf(String stage) => switch (stage) {
         'probe' => '探测',
         'cuts' => '镜头切分',
         'detect' => '字幕检测',
         'repair' => '修复',
         'engine' => '合成输出',
         'verify' => '复检',
-        _ => status == 'succeeded' ? '完成' : '等待',
+        'upload' => '上传',
+        'cloud' => '云端处理',
+        'download' => '下载成片',
+        _ => '',
       };
+
+  String get stageLabel {
+    final l = labelOf(stage);
+    if (l.isNotEmpty) return l;
+    return status == 'succeeded' ? '完成' : '等待';
+  }
 }
 
 class EngineEvent {

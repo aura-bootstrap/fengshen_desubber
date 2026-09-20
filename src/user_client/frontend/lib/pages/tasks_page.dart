@@ -115,9 +115,11 @@ class TaskCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: LinearProgressIndicator(
-                    // 仅运行中且无帧计数时走不确定动画;其余一律确定值:
-                    // 完成=满格静止,失败/停止=停在当时进度,排队/待运行=空
-                    value: task.status == 'running' && task.total <= 0 ? null : task.progress,
+                    // 总进度 = (已过阶段 + 阶段内进度)/阶段数,每个阶段都有确定值;
+                    // 仅刚启动(未入任何阶段)时走不确定动画。
+                    value: task.status == 'running' && task.stageIndex < 0
+                        ? null
+                        : task.progress,
                     minHeight: 6,
                     borderRadius: BorderRadius.circular(3),
                     valueColor: AlwaysStoppedAnimation(switch (task.status) {
@@ -130,11 +132,7 @@ class TaskCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Text(
-                  task.total > 0
-                      ? '${task.done}/${task.total} 帧'
-                      : task.status == 'succeeded'
-                          ? '100%'
-                          : '',
+                  _progressText(task),
                   style: TextStyle(fontSize: 11, color: t.dim, fontFamily: AppConst.fontMono),
                 ),
               ],
@@ -184,6 +182,18 @@ class TaskCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 进度文本:阶段内可计数时附计数(repair=帧,upload/download=MB),否则只给总百分比。
+  String _progressText(DesubTask task) {
+    final pct = '${(task.progress * 100).round()}%';
+    if (task.total > 0) {
+      if (task.stage == 'repair') return '$pct(${task.done}/${task.total} 帧)';
+      String mb(int v) => (v / 1048576).toStringAsFixed(1);
+      return '$pct(${mb(task.done)}/${mb(task.total)} MB)';
+    }
+    if (task.status == 'running' || task.status == 'succeeded') return pct;
+    return '';
   }
 
   Future<void> _act(BuildContext context, Future<String?> Function() op) async {

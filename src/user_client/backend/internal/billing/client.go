@@ -122,9 +122,32 @@ func (c *Client) Balance(ctx context.Context) (int, error) {
 	return out.Credits, nil
 }
 
+// ProgressFn 传输进度回调(sent/got 字节数,total 未知时为 0)。
+type ProgressFn func(done, total int64)
+
+// progressReader 包装上传流,按读累计回调字节进度。
+type progressReader struct {
+	r     io.Reader
+	total int64
+	sent  int64
+	fn    ProgressFn
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.sent += int64(n)
+		if p.fn != nil {
+			p.fn(p.sent, p.total)
+		}
+	}
+	return n, err
+}
+
 // CreateTask 上传本地视频建云端任务(流式,不整读进内存)。
-// provider 非空时带 X-Provider 头。错误: 402 *InsufficientBalanceError。
-func (c *Client) CreateTask(ctx context.Context, filePath, provider string) (*CreateTaskResp, error) {
+// provider 非空时带 X-Provider 头;onProgress 非空时回报上传字节进度。
+// 错误: 402 *InsufficientBalanceError。
+func (c *Client) CreateTask(ctx context.Context, filePath, provider string, onProgress ProgressFn) (*CreateTaskResp, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("打开待上传视频失败: %v", err)
@@ -134,7 +157,11 @@ func (c *Client) CreateTask(ctx context.Context, filePath, provider string) (*Cr
 	if err != nil {
 		return nil, err
 	}
-	req, err := c.newRequest(ctx, http.MethodPost, "/v1/tasks", f)
+	body := io.Reader(f)
+	if onProgress != nil {
+		body = &progressReader{r: f, total: st.Size(), fn: onProgress}
+	}
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/tasks", body)
 	if err != nil {
 		return nil, err
 	}
@@ -181,8 +208,9 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (*TaskInfo, error) 
 }
 
 // Download 流式下载成片到 dstPath(先写 .part 再 rename,避免半截文件)。
+// onProgress 非空时回报下载字节进度(服务端未给 Content-Length 时 total 为 0)。
 // 错误: 409 ErrTaskNotReady。
-func (c *Client) Download(ctx context.Context, taskID, dstPath string) error {
+func (c *Client) Download(ctx context.Context, taskID, dstPath string, onProgress ProgressFn) error {
 	req, err := c.newRequest(ctx, http.MethodGet, "/v1/tasks/"+taskID+"/download", nil)
 	if err != nil {
 		return err
@@ -200,7 +228,15 @@ func (c *Client) Download(ctx context.Context, taskID, dstPath string) error {
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(f, resp.Body)
+	var src io.Reader = resp.Body
+	total := resp.ContentLength // 未知时为 -1,归一成 0
+	if total < 0 {
+		total = 0
+	}
+	if onProgress != nil {
+		src = &progressReader{r: resp.Body, total: total, fn: onProgress}
+	}
+	_, copyErr := io.Copy(f, src)
 	syncErr := f.Sync()
 	closeErr := f.Close()
 	if err := firstErr(copyErr, syncErr, closeErr); err != nil {

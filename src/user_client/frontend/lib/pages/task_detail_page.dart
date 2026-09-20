@@ -78,21 +78,23 @@ class StageTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    const labels = ['探测', '镜头切分', '字幕检测', '修复', '合成输出', '复检'];
+    final labels = task.stages.map(DesubTask.labelOf).toList();
     final cur = task.status == 'succeeded' ? labels.length : task.stageIndex;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             for (var i = 0; i < labels.length; i++) ...[
               _stageDot(context, labels[i],
                   i < cur || (i == cur && task.status == 'succeeded'),
-                  i == cur && task.status == 'running'),
+                  i == cur && task.status == 'running', _stagePct(i, cur)),
               if (i < labels.length - 1)
                 Expanded(
                   child: Container(
                     height: 2,
+                    margin: const EdgeInsets.only(top: 11),
                     color: i < cur ? t.success : t.border,
                   ),
                 ),
@@ -103,7 +105,18 @@ class StageTimeline extends StatelessWidget {
     );
   }
 
-  Widget _stageDot(BuildContext context, String label, bool done, bool active) {
+  /// 每个阶段的百分比:已完成 100%,进行中按阶段内计数(无计数的阶段
+  /// 不显示数字,转圈即进行中),未开始 0%。
+  String _stagePct(int i, int cur) {
+    if (i < cur || task.status == 'succeeded') return '100%';
+    if (i > cur) return '0%';
+    if (task.status == 'running' && task.total > 0) {
+      return '${(task.stageFraction * 100).round()}%';
+    }
+    return '';
+  }
+
+  Widget _stageDot(BuildContext context, String label, bool done, bool active, String pct) {
     final t = context.tokens;
     final color = done ? t.success : active ? t.primary : t.faint;
     return Column(
@@ -127,6 +140,8 @@ class StageTimeline extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(label, style: TextStyle(fontSize: 11, color: color)),
+        Text(pct,
+            style: TextStyle(fontSize: 10, color: t.faint, fontFamily: AppConst.fontMono)),
       ],
     );
   }

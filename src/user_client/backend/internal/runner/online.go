@@ -18,9 +18,23 @@ import (
 )
 
 const (
-	onlinePollInterval = 15 * time.Second // 云端状态轮询间隔
-	onlinePollTimeout  = 6 * time.Hour    // 长视频轮询上限
+	onlinePollInterval  = 15 * time.Second // 云端状态轮询间隔
+	onlinePollTimeout   = 6 * time.Hour    // 长视频轮询上限
+	xferProgressMinStep = time.Second      // 上传/下载进度事件最小间隔(节流)
 )
+
+// xferProgress 把 billing 的字节回调节流转成 SSE progress 事件(Done/Total 单位:字节)。
+func xferProgress(stage string, events chan<- Event) billing.ProgressFn {
+	var last time.Time
+	return func(done, total int64) {
+		now := time.Now()
+		if now.Sub(last) < xferProgressMinStep && done < total {
+			return
+		}
+		last = now
+		events <- Event{Type: "progress", Stage: stage, Done: int(done), Total: int(total)}
+	}
+}
 
 // runOnline 在线去字幕主流程。ctx 取消(用户停止任务)会中断上传/轮询/下载。
 func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName, provider string, events chan<- Event) error {
@@ -36,7 +50,7 @@ func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName, provider 
 	// 1. 上传原片建单。
 	events <- Event{Type: "stage", Stage: "upload"}
 	events <- Event{Type: "log", Msg: "上传视频到云端去字幕服务..."}
-	created, err := cli.CreateTask(ctx, srcPath, provider)
+	created, err := cli.CreateTask(ctx, srcPath, provider, xferProgress("upload", events))
 	if err != nil {
 		return fmt.Errorf("云端建单失败: %s", billing.Message(err))
 	}
@@ -89,7 +103,7 @@ download:
 	events <- Event{Type: "stage", Stage: "download"}
 	events <- Event{Type: "log", Msg: "云端处理完成,下载成片..."}
 	dst := filepath.Join(workDir, outName)
-	if err := cli.Download(ctx, created.TaskID, dst); err != nil {
+	if err := cli.Download(ctx, created.TaskID, dst, xferProgress("download", events)); err != nil {
 		return fmt.Errorf("下载成片失败: %s", billing.Message(err))
 	}
 	if _, err := os.Stat(dst); err != nil {

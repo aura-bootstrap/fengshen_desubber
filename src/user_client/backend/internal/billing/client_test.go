@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -147,12 +148,17 @@ func TestCreateTaskStreamsUpload(t *testing.T) {
 			"task_id": "task-1", "duration_sec": 12.5, "cost": 25, "balance": 95,
 		})
 	})
-	resp, err := newTestClient(srv).CreateTask(context.Background(), video, "diffueraser")
+	var lastDone, totalSeen int64 = -1, -1
+	resp, err := newTestClient(srv).CreateTask(context.Background(), video, "diffueraser",
+		func(done, total int64) { lastDone, totalSeen = done, total })
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	if resp.TaskID != "task-1" || resp.Cost != 25 || resp.Balance != 95 || resp.DurationSec != 12.5 {
 		t.Fatalf("建单响应不符: %+v", resp)
+	}
+	if lastDone != int64(len(payload)) || totalSeen != int64(len(payload)) {
+		t.Fatalf("上传进度回调不符: done=%d total=%d, want %d", lastDone, totalSeen, len(payload))
 	}
 }
 
@@ -167,7 +173,7 @@ func TestCreateTaskInsufficientBalance(t *testing.T) {
 	dir := t.TempDir()
 	video := filepath.Join(dir, "a.mp4")
 	os.WriteFile(video, []byte("x"), 0o644)
-	_, err := newTestClient(srv).CreateTask(context.Background(), video, "")
+	_, err := newTestClient(srv).CreateTask(context.Background(), video, "", nil)
 	var insuff *InsufficientBalanceError
 	if !errors.As(err, &insuff) {
 		t.Fatalf("err = %v, want *InsufficientBalanceError", err)
@@ -215,11 +221,17 @@ func TestDownloadStreamsToDisk(t *testing.T) {
 			t.Errorf("意外路径: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		io.WriteString(w, payload)
 	})
 	dst := filepath.Join(t.TempDir(), "out.mp4")
-	if err := newTestClient(srv).Download(context.Background(), "task-1", dst); err != nil {
+	var lastDone, totalSeen int64 = -1, -1
+	if err := newTestClient(srv).Download(context.Background(), "task-1", dst,
+		func(done, total int64) { lastDone, totalSeen = done, total }); err != nil {
 		t.Fatalf("Download: %v", err)
+	}
+	if lastDone != int64(len(payload)) || totalSeen != int64(len(payload)) {
+		t.Fatalf("下载进度回调不符: done=%d total=%d, want %d", lastDone, totalSeen, len(payload))
 	}
 	got, err := os.ReadFile(dst)
 	if err != nil || string(got) != payload {
@@ -237,7 +249,7 @@ func TestDownloadNotReady(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "task not completed"})
 	})
 	dst := filepath.Join(t.TempDir(), "out.mp4")
-	err := newTestClient(srv).Download(context.Background(), "task-1", dst)
+	err := newTestClient(srv).Download(context.Background(), "task-1", dst, nil)
 	if !errors.Is(err, ErrTaskNotReady) {
 		t.Fatalf("err = %v, want ErrTaskNotReady", err)
 	}

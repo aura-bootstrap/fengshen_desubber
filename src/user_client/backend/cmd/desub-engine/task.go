@@ -188,7 +188,12 @@ func (s *server) consume(events <-chan Event, taskID int64) {
 		case "stage":
 			s.taskDB.UpdateProgress(taskID, ev.Stage, 0, 0)
 		case "progress":
-			s.taskDB.UpdateProgress(taskID, "repair", ev.Done, ev.Total)
+			// 在线链路上传/下载带 Stage;本地 docker 管线只有 repair 帧计数(空值回落)。
+			stage := ev.Stage
+			if stage == "" {
+				stage = "repair"
+			}
+			s.taskDB.UpdateProgress(taskID, stage, ev.Done, ev.Total)
 		case "report":
 			report = ev.Msg
 			continue // 不转发原始报告,前端走详情接口取

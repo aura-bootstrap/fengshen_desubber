@@ -87,7 +87,9 @@ class AppState extends ChangeNotifier {
           final t = tasks[i];
           tasks[i] = DesubTask(
             id: t.id, name: t.name, srcPath: t.srcPath, outName: t.outName,
-            paramsJson: t.paramsJson, status: t.status, stage: 'repair',
+            paramsJson: t.paramsJson, status: t.status,
+            // 在线链路 progress 带 stage(upload/download);本地管线空值=repair 帧计数
+            stage: ev.stage.isNotEmpty ? ev.stage : 'repair',
             done: ev.done, total: ev.total, workDir: t.workDir,
             reportJson: t.reportJson, error: t.error,
             createdAt: t.createdAt, updatedAt: t.updatedAt,
