@@ -130,7 +130,6 @@ class EngineEvent {
 /// 卡密状态(/api/cardkey/status),在线去字幕引擎使用。
 class CardKeyStatus {
   final bool activated;
-  final String server;
   final String masked; // 脱敏卡号,形如 ABCDE…Z
   final int credits; // 剩余点数
   final String machineHash;
@@ -139,7 +138,6 @@ class CardKeyStatus {
 
   const CardKeyStatus({
     required this.activated,
-    required this.server,
     required this.masked,
     required this.credits,
     required this.machineHash,
@@ -149,7 +147,6 @@ class CardKeyStatus {
 
   factory CardKeyStatus.fromJson(Map<String, dynamic> j) => CardKeyStatus(
         activated: j['activated'] as bool? ?? false,
-        server: j['server'] as String? ?? '',
         masked: j['masked'] as String? ?? '',
         credits: (j['credits'] as num? ?? 0).toInt(),
         machineHash: j['machine_hash'] as String? ?? '',

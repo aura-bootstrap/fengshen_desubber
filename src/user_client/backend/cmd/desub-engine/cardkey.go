@@ -71,25 +71,25 @@ func (s *server) handleCardkeyStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleCardkeyActivate POST /api/cardkey/activate {"server","card_key"}
-// 流程: MachineID() -> 远端 activate -> 成功落 keyfile。
+// handleCardkeyActivate POST /api/cardkey/activate {"card_key"}
+// 计费服务地址用二进制内置的 billing.ServerURL(发布构建 ldflags -X 覆盖),
+// 前端只传卡面。流程: MachineID() -> 远端 activate -> 成功落 keyfile。
 func (s *server) handleCardkeyActivate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Server  string `json:"server"`
 		CardKey string `json:"card_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求解析失败")
 		return
 	}
-	server := strings.TrimSpace(req.Server)
+	server := strings.TrimSpace(billing.ServerURL)
 	cardKey := strings.ToUpper(strings.TrimSpace(req.CardKey))
-	if server == "" || cardKey == "" {
-		writeErr(w, http.StatusUnprocessableEntity, "服务地址与卡密不能为空")
+	if cardKey == "" {
+		writeErr(w, http.StatusUnprocessableEntity, "卡密不能为空")
 		return
 	}
-	if !strings.HasPrefix(server, "http://") && !strings.HasPrefix(server, "https://") {
-		writeErr(w, http.StatusUnprocessableEntity, "服务地址须以 http:// 或 https:// 开头")
+	if server == "" {
+		writeErr(w, http.StatusInternalServerError, "授权服务端地址未配置(请升级或联系发行方)")
 		return
 	}
 	hash, _, err := cardkey.MachineID()

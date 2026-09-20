@@ -24,8 +24,9 @@ class CardKeyFormatter extends TextInputFormatter {
   }
 }
 
-/// 卡密激活对话框:服务器地址 + 卡号输入,激活中 spinner,
-/// 失败直接展示服务端返回的中文错误文案。激活成功 pop(true),取消 pop(false)。
+/// 卡密激活对话框:只输卡号(计费服务地址写死在引擎二进制,同 slicer),
+/// 激活中 spinner,失败直接展示服务端返回的中文错误文案。
+/// 激活成功 pop(true),取消 pop(false)。
 Future<bool?> showCardKeyActivateDialog(BuildContext context, AppState state) {
   return showDialog<bool>(
     context: context,
@@ -43,40 +44,26 @@ class _CardKeyActivateDialog extends StatefulWidget {
 }
 
 class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
-  final _server = TextEditingController();
   final _key = TextEditingController();
   bool _busy = false;
   String _error = '';
 
   @override
-  void initState() {
-    super.initState();
-    // 默认回填状态里的服务器地址;无则留空走 hint 示例。
-    _server.text = widget.state.cardKey?.server ?? '';
-  }
-
-  @override
   void dispose() {
-    _server.dispose();
     _key.dispose();
     super.dispose();
-  }
-
-  bool get _serverOk {
-    final s = _server.text.trim();
-    return s.startsWith('http://') || s.startsWith('https://');
   }
 
   bool get _keyOk => _key.text.trim().replaceAll('-', '').length >= 10;
 
   Future<void> _activate() async {
-    if (!_serverOk || !_keyOk || _busy) return;
+    if (!_keyOk || _busy) return;
     setState(() {
       _busy = true;
       _error = '';
     });
     try {
-      await widget.state.activateCardKey(_server.text.trim(), _key.text.trim());
+      await widget.state.activateCardKey(_key.text.trim());
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) {
@@ -102,23 +89,10 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('输入计费服务器地址与卡号。激活后本机与该卡绑定,在线去字幕按分钟扣点。',
+            Text('输入发行方提供的卡号(形如 XXXXX-XXXXX-XXXXX-XXXXX)。激活后本机与该卡绑定,'
+                '在线去字幕按分钟扣点。',
                 style: TextStyle(fontSize: 12.5, color: t.dim)),
             const SizedBox(height: 16),
-            TextField(
-              controller: _server,
-              enabled: !_busy,
-              style: TextStyle(fontSize: 13, fontFamily: 'monospace', color: t.ink),
-              decoration: InputDecoration(
-                labelText: '服务器地址',
-                hintText: 'http://host:18080',
-                errorText: _server.text.isEmpty || _serverOk
-                    ? null
-                    : '需以 http:// 或 https:// 开头',
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 12),
             TextField(
               controller: _key,
               autofocus: true,
@@ -169,7 +143,7 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
           child: const Text('取消'),
         ),
         FilledButton.icon(
-          onPressed: _serverOk && _keyOk && !_busy ? _activate : null,
+          onPressed: _keyOk && !_busy ? _activate : null,
           icon: _busy
               ? const SizedBox(
                   width: 14,

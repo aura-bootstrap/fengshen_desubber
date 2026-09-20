@@ -93,11 +93,6 @@ class LicenseCard extends StatelessWidget {
                 style: TextStyle(fontSize: 11, color: t.dim),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 2),
-            Text('服务器 ${ck.server}',
-                style: TextStyle(fontSize: 11, color: t.dim),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
             if (ck.degraded || ck.stale) ...[
               const SizedBox(height: 2),
               Text('余额为本地缓存,云端暂不可达',

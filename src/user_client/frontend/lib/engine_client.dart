@@ -99,13 +99,11 @@ class EngineClient {
       jsonDecode(await _get('/api/cardkey/status')) as Map<String, dynamic>);
 
   /// 激活卡密;失败抛 ApiException(toString 即服务端中文错误文案)。
-  Future<void> activateCardKey({
-    required String server,
-    required String cardKey,
-  }) async {
+  /// 计费服务地址写死在引擎二进制里,前端只传卡号。
+  Future<void> activateCardKey(String cardKey) async {
     final resp = await _http.post(_u('/api/cardkey/activate'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'server': server, 'card_key': cardKey}));
+        body: jsonEncode({'card_key': cardKey}));
     if (resp.statusCode != 200) {
       throw ApiException(resp.statusCode, utf8.decode(resp.bodyBytes));
     }

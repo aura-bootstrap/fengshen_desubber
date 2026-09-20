@@ -40,8 +40,8 @@ class AppState extends ChangeNotifier {
   }
 
   /// 激活卡密,成功后刷新状态;失败原样上抛(ApiException 中文文案)。
-  Future<void> activateCardKey(String server, String cardKey) async {
-    await client.activateCardKey(server: server, cardKey: cardKey);
+  Future<void> activateCardKey(String cardKey) async {
+    await client.activateCardKey(cardKey);
     await refreshCardKey();
   }
 
