@@ -85,10 +85,10 @@ func (p Params) args() []string {
 		out = append(out, "--pp-concurrency", strconv.Itoa(p.PPConcurrency))
 	}
 	if p.SAM2 {
-		out = append(out, "--sam2")
+		out = append(out, "--sam2", "--sam2-script", "/src/scripts/sam2_masks.py")
 	}
 	if p.FaceRestore {
-		out = append(out, "--face-restore")
+		out = append(out, "--face-restore", "--face-restore-script", "/src/scripts/face_restore.py")
 	}
 	return out
 }
