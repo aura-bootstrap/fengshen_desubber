@@ -1,4 +1,4 @@
-// desub-engine is the headless task service behind the desub dev_client
+// desub-engine is the headless task service behind the desub user_client
 // Flutter shell: it owns the SQLite task store, schedules containerised
 // desub runs one at a time, and streams progress over SSE.
 //

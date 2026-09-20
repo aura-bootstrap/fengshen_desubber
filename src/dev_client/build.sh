@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$(dirname "$0")"
+mkdir -p "$ROOT/bin"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$ROOT/bin/desub-linux-amd64" ./cmd/desub
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$ROOT/bin/desub-windows-amd64.exe" ./cmd/desub
+echo "built bin/desub-linux-amd64 and bin/desub-windows-amd64.exe"
