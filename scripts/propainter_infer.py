@@ -94,6 +94,14 @@ def main():
     pad = int(mh * 1.75 + 0.5)
     y0 = max(0, rows[0] - pad)
     y1 = min(h, rows[-1] + pad + 1)
+    # RAFT's correlation pyramid (8x encoder + 3 avg-pool levels) needs the
+    # processing height >= 64 px; sliver masks (a single subtitle row) must
+    # be padded to a 64 px crop or RAFT crashes on a zero-size pooling.
+    if y1 - y0 < 64:
+        cy = (y0 + y1) // 2
+        y0 = max(0, cy - 32)
+        y1 = min(h, y0 + 64)
+        y0 = max(0, y1 - 64)
 
     work = os.path.join(args.out, ".work")
     os.makedirs(work, exist_ok=True)

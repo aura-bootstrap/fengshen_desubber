@@ -185,6 +185,17 @@ def main():
         y0 = max(0, y0 - (grow - up))
         if (y1 - y0) % 8:
             y1 -= (y1 - y0) % 8
+    # RAFT's correlation pyramid (8x encoder + 3 avg-pool levels) needs the
+    # processing height >= 64 px, and the DiffuEraser prior additionally
+    # scales the crop by 0.6 -- so sliver masks (a single subtitle row) must
+    # be padded to a 112 px crop or RAFT crashes on a zero-size pooling.
+    if y1 - y0 < 112:
+        cy = (y0 + y1) // 2
+        y0 = max(0, cy - 56)
+        y1 = min(h, y0 + 112)
+        y0 = max(0, y1 - 112)
+        if (y1 - y0) % 8:
+            y1 -= (y1 - y0) % 8
 
     work = os.path.join(args.out, ".work-diffueraser")
     shutil.rmtree(work, ignore_errors=True)
