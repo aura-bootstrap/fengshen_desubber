@@ -33,6 +33,9 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   // 质量优先于耗时,固定强制(force_engine 对齐 slice1-pp-grain tag 参数)
   bool diffueraser = true;
   static const forceEngine = 'propainter';
+  // SAM2 像素级掩码 + GFPGAN 人脸先验:已验证(v14 管线),质量优先默认开。
+  bool sam2 = true;
+  bool faceRestore = true;
   bool runNow = true;
   bool busy = false;
 
@@ -72,6 +75,8 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
           'crf': int.tryParse(crfCtrl.text) ?? 0,
           'force_engine': forceEngine,
           'diffueraser': diffueraser,
+          'sam2': sam2,
+          'face_restore': faceRestore,
         },
         runNow: runNow,
       );

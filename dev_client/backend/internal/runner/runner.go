@@ -43,7 +43,7 @@ func (o *DockerOptions) defaults() {
 		o.Image = "desub:cu124"
 	}
 	if o.Bin == "" {
-		o.Bin = "/src/bin/desub-lx-v13"
+		o.Bin = "/src/bin/desub-lx-v14"
 	}
 	if o.Proxy == "" {
 		o.Proxy = "http://host.docker.internal:7897"
@@ -59,6 +59,8 @@ type Params struct {
 	ForceEngine string `json:"force_engine"`
 	PPConcurrency int  `json:"pp_concurrency"`
 	DiffuEraser bool   `json:"diffueraser"`
+	SAM2        bool   `json:"sam2"`
+	FaceRestore bool   `json:"face_restore"`
 }
 
 // args converts the snapshot into desub remove flags.
@@ -81,6 +83,12 @@ func (p Params) args() []string {
 	}
 	if p.PPConcurrency > 1 {
 		out = append(out, "--pp-concurrency", strconv.Itoa(p.PPConcurrency))
+	}
+	if p.SAM2 {
+		out = append(out, "--sam2")
+	}
+	if p.FaceRestore {
+		out = append(out, "--face-restore")
 	}
 	return out
 }
@@ -121,6 +129,9 @@ func Run(ctx context.Context, o DockerOptions, workDir, srcPath, outName, params
 		image = "desub:diffueraser"
 		painterScript = "/src/scripts/diffueraser_infer.py"
 		args = append(args, "-e", "DIFFUERASER_HOME=/work/vendor/DiffuEraser")
+	}
+	if p.SAM2 {
+		args = append(args, "-e", "SAM2_HOME=/work/vendor/sam2")
 	}
 	args = append(args,
 		image, o.Bin, "remove", "/task/input.mp4",
