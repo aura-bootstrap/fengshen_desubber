@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../theme.dart';
 import '../widgets/cardkey_activate_dialog.dart';
+import '../widgets/styled_dropdown.dart';
 
 /// 新建任务向导:选视频 + 参数快照 + 是否立即运行。
 Future<void> showNewTaskDialog(BuildContext context, AppState state) {
@@ -35,6 +36,11 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   // 质量优先于耗时,固定强制(force_engine 对齐 slice1-pp-grain tag 参数)
   String engine = 'diffueraser';
   static const forceEngine = 'propainter';
+  static const engineLabels = {
+    'diffueraser': 'DiffuEraser 扩散(本地·最佳画质,慢)',
+    'propainter': 'ProPainter(本地·快)',
+    'online': '在线去字幕(云端·按分钟扣点)',
+  };
   bool runNow = true;
   bool busy = false;
 
@@ -152,23 +158,21 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                Text('引擎:', style: TextStyle(fontSize: 13, color: t.dim)),
-                const SizedBox(width: 8),
-                DropdownButton<String>(
-                  value: engine,
-                  isDense: true,
-                  items: const [
-                    DropdownMenuItem(value: 'diffueraser', child: Text('DiffuEraser 扩散(本地·最佳画质,慢)', style: TextStyle(fontSize: 13))),
-                    DropdownMenuItem(value: 'propainter', child: Text('ProPainter(本地·快)', style: TextStyle(fontSize: 13))),
-                    DropdownMenuItem(value: 'online', child: Text('在线去字幕(云端·按分钟扣点)', style: TextStyle(fontSize: 13))),
-                  ],
-                  onChanged: busy
-                      ? null
-                      : (v) {
-                          setState(() => engine = v ?? 'diffueraser');
-                          // 切到在线引擎时顺带拉一次卡密状态。
-                          if (v == 'online') widget.state.refreshCardKey();
-                        },
+                // 照抄 slicer 的自绘 StyledDropdown(查询旁状态筛选同款):
+                // 触发器复用 TextField 外壳,label 浮在框缘。
+                Expanded(
+                  child: StyledDropdown(
+                    value: engine,
+                    options: engineLabels.keys.toList(),
+                    labelOf: (v) => engineLabels[v] ?? v,
+                    decoration: const InputDecoration(labelText: '引擎'),
+                    onChanged: (v) {
+                      if (busy || v == null) return;
+                      setState(() => engine = v);
+                      // 切到在线引擎时顺带拉一次卡密状态。
+                      if (v == 'online') widget.state.refreshCardKey();
+                    },
+                  ),
                 ),
               ],
             ),
