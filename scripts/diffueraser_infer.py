@@ -262,7 +262,8 @@ def main():
     # feather selects the old Gaussian-ramp composite as a fallback.
     # Diffusion output is also measurably softer than the source texture
     # (stripe contrast ~15 vs ~19), so the masked area gets a mild unsharp
-    # boost before cloning (DIFFUERASER_SHARPEN, 0 disables).
+    # boost before cloning (DIFFUERASER_SHARPEN, 0 disables; default 1.0
+    # measured crisper on pinstripe texture with no halo regression vs 0.6).
     # Poisson pins boundary values but cannot phase-align periodic texture:
     # regenerated pinstripes keep a random phase, so stripes break at the
     # mask edge even after cloning. When the texture just outside the mask
@@ -275,7 +276,7 @@ def main():
     # per chunk so frames cannot drift against each other.
     blend = os.environ.get("DIFFUERASER_BLEND", "poisson")
     feather = max(0, int(os.environ.get("PROPAINTER_FEATHER", "6")))
-    sharpen = float(os.environ.get("DIFFUERASER_SHARPEN", "0.6"))
+    sharpen = float(os.environ.get("DIFFUERASER_SHARPEN", "1.0"))
     crop_h = y1 - y0
     sp_dx = sp_dy = 0
     if os.environ.get("DIFFUERASER_STRIPES", "1") != "0" and n > 0:

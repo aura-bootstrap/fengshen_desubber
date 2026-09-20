@@ -4,3 +4,4 @@ dev_client/backend/bin/
 src/billing_server/dist/
 src/billing_server/bin/
 src/billing_server/*.exe
+__pycache__/

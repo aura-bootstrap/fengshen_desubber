@@ -226,6 +226,8 @@ func cmdRemove(args []string) error {
 	sam2On := fs.Bool("sam2", false, "refine masks to pixel level via the SAM2 sidecar before repair")
 	sam2Script := fs.String("sam2-script", "scripts/sam2_masks.py", "path to the SAM2 mask-refinement sidecar script")
 	sam2Home := fs.String("sam2-home", "", "SAM2_HOME checkout dir for the sidecar (empty: inherit env)")
+	faceRestore := fs.Bool("face-restore", false, "restore faces inside the repair zone via the GFPGAN sidecar")
+	faceRestoreScript := fs.String("face-restore-script", "scripts/face_restore.py", "path to the GFPGAN face-prior sidecar script")
 	grainOn := fs.Bool("grain", false, "match repaired-area texture (noise, chroma, blockiness) to the source")
 	forceEngine := fs.String("force-engine", "", "override routing for every event: motion|propainter")
 	vlmQC := fs.Bool("vlm-qc", false, "re-judge verify-stage residue boxes with a VLM (scripts/vlm_qc.py)")
@@ -269,8 +271,9 @@ func cmdRemove(args []string) error {
 		PainterTightDilate: *ppTightDilate,
 		PainterRaftIter:    *ppRaftIter, PainterNeighborLength: *ppNeighbor,
 		PainterConcurrency: *ppConcurrency,
-		SAM2: *sam2On, SAM2Script: *sam2Script, SAM2Home: *sam2Home,
-		Grain:              *grainOn, ForceEngine: *forceEngine, ManifestPath: *manifestOut,
+		SAM2:               *sam2On, SAM2Script: *sam2Script, SAM2Home: *sam2Home,
+		FaceRestore: *faceRestore, FaceRestoreScript: *faceRestoreScript,
+		Grain: *grainOn, ForceEngine: *forceEngine, ManifestPath: *manifestOut,
 		VLMQC: *vlmQC, VLMScript: *vlmScript, VLMEndpoint: *vlmEndpoint, VLMModel: *vlmModel, VLMAPIKey: *vlmAPIKey,
 		RiskListPath: *riskList, RiskCoverage: *riskCov,
 		DumpDir: *dump, DumpLimit: *dumpLimit,

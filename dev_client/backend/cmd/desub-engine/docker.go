@@ -17,7 +17,7 @@ func (d *dockerRunner) Run(ctx context.Context, tk *store.Task, events chan<- Ev
 	o := runner.DockerOptions{
 		Lab:    d.lab,
 		Repo:   envOr("DESUB_REPO", `W:\github.com\aura-bootstrap\fengshen_desubber`),
-		Bin:    envOr("DESUB_BIN", "/src/bin/desub-lx-v12"),
+		Bin:    envOr("DESUB_BIN", "/src/bin/desub-lx-v13"),
 		GPUs:   envOr("DESUB_GPUS", "all"),
 		KeyDir: d.exeDir, // cardkey.json 所在目录,在线模式读卡密用
 	}
