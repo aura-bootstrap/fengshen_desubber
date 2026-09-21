@@ -65,8 +65,13 @@ func (a *Account) fromStored(s *accountStored) {
 }
 
 // CreateAccount SETNX 建号;撞名 ok=false。
+// 先补 #meta 行(与 importCard 同则):redimo SET 只写值行,无 meta 的键
+// ScanMetaKeys 扫不到,ListAccounts 会漏掉该账号。
 func (s *Store) CreateAccount(ctx context.Context, a *Account) (bool, error) {
 	st := a.stored()
+	if _, err := s.cli.WithContext(ctx).CreateTypeIfAbsent(keyAcct+a.Username, redimo.TypeString, 0, s.Now().Unix()); err != nil {
+		return false, err
+	}
 	ok, err := s.cli.WithContext(ctx).SET(keyAcct+a.Username, mustMarshal(&st), redimo.IfNotExists)
 	return ok, err
 }

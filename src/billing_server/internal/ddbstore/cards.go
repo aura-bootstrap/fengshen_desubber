@@ -241,7 +241,7 @@ func (s *Store) EnsureRedeemed(ctx context.Context, c *Card, machineHash string)
 		_ = s.AppendAudit(ctx, AuditEntry{Actor: "card", Action: "redeem", Target: c.CodeMasked,
 			Detail: fmt.Sprintf("machine=%s moved=%d", machineHash, moved), OK: true})
 	}
-	m, err := s.GetMachine(ctx, machineHash)
+	m, err := s.ensureMachine(ctx, machineHash) // 0 点数卡核销也要建档
 	if err != nil {
 		return 0, err
 	}

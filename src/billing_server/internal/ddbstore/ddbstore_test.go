@@ -4,21 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"fengshen-desubber/billing_server/internal/cardkey"
+	"fengshen-desubber/billing_server/internal/testutil"
 )
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	if os.Getenv("DDB_ENDPOINT") == "" {
-		t.Skip("需要 DDB_ENDPOINT 指向 DynamoDB Local")
-	}
-	t.Setenv("TABLE_REDIMO", "fengshen-desubber")
-	t.Setenv("CARD_PEPPER", "test-pepper")
+	testutil.FreshTable(t) // 独立表:共享表会跨轮残留机器余额/队列/审计
 	st, err := NewFromEnv(context.Background())
 	if err != nil {
 		t.Fatalf("NewFromEnv: %v", err)

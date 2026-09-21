@@ -65,11 +65,7 @@ type env struct {
 func setup(t *testing.T, op provider.Operator) *env {
 	t.Helper()
 	dir := t.TempDir()
-	if os.Getenv("DDB_ENDPOINT") == "" {
-		t.Skip("需要 DDB_ENDPOINT 指向 DynamoDB Local")
-	}
-	t.Setenv("TABLE_REDIMO", "fengshen-desubber")
-	t.Setenv("CARD_PEPPER", "test-pepper")
+	testutil.FreshTable(t) // 独立表:共享表会跨轮残留队列任务,worker 会先消费陈旧任务
 	st, err := ddbstore.NewFromEnv(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -533,7 +529,8 @@ func TestActivateFlow(t *testing.T) {
 		Status      string `json:"status"`
 	}
 	json.Unmarshal(b, &act)
-	if act.Credits != 3 || act.MachineHash != testMachine || act.Status != "redeemed" {
+	// credits 为机器累计余额:setup 已给同机充 5,本卡核销 3 → 8
+	if act.Credits != 8 || act.MachineHash != testMachine || act.Status != "redeemed" {
 		t.Fatalf("activate resp: %+v", act)
 	}
 
@@ -543,7 +540,7 @@ func TestActivateFlow(t *testing.T) {
 		t.Fatalf("re-activate same machine: %d", code)
 	}
 	json.Unmarshal(b, &act)
-	if act.Credits != 3 {
+	if act.Credits != 8 {
 		t.Fatalf("idempotent activate double-credited: %+v", act)
 	}
 
@@ -592,7 +589,7 @@ func TestActivateFlow(t *testing.T) {
 		t.Fatalf("revoked unbind want 400, got %d", code)
 	}
 
-	// 恢复：已核销卡回 redeemed（机器绑定保留），绑定机余额仍 3
+	// 恢复：已核销卡回 redeemed（机器绑定保留），绑定机余额仍 8
 	code, _ = e.do(t, "POST", "/v1/admin/cards/unrevoke", e.adminTok,
 		map[string]any{"card": card})
 	if code != 200 {
@@ -606,8 +603,8 @@ func TestActivateFlow(t *testing.T) {
 		Credits int64 `json:"credits"`
 	}
 	json.Unmarshal(b, &bal)
-	if bal.Credits != 3 {
-		t.Fatalf("balance after unrevoke want 3, got %d", bal.Credits)
+	if bal.Credits != 8 {
+		t.Fatalf("balance after unrevoke want 8, got %d", bal.Credits)
 	}
 }
 
