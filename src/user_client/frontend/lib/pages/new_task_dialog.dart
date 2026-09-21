@@ -28,9 +28,10 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   final nameCtrl = TextEditingController();
   final outCtrl = TextEditingController();
   final crfCtrl = TextEditingController(text: '15');
-  bool propainter = true;
-  bool grain = true;
-  bool ocr = true;
+  // 修复三件套不在 UI 暴露,底层固定全开(对齐 slice1-pp-grain tag 参数)。
+  static const propainter = true;
+  static const grain = true;
+  static const ocr = true;
   // 修复引擎三选一:diffueraser(DiffuEraser 扩散,本地,画质最好,最慢)/
   // propainter(ProPainter,本地,快)/ online(在线去字幕,云端,按分钟扣点)。
   // 本地引擎路由只留 painter 档:自动路由会把慢动事件分进 motion 档留残影,
@@ -147,15 +148,6 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
               decoration: const InputDecoration(labelText: '输出文件名'),
             ),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 16,
-              children: [
-                _check('ProPainter 修复', propainter, (v) => setState(() => propainter = v)),
-                _check('纹理匹配(grain)', grain, (v) => setState(() => grain = v)),
-                _check('PaddleOCR 融合', ocr, (v) => setState(() => ocr = v)),
-              ],
-            ),
-            const SizedBox(height: 10),
             Row(
               children: [
                 SizedBox(
