@@ -21,8 +21,10 @@ type CreditTx struct {
 	CreatedAt    time.Time
 }
 
-// AppendTx 追加流水（Hash field=auditSK，追加序=时间序）。追加失败由调用方记日志（D1=A）。
-func (s *Store) AppendTx(ctx context.Context, cardID int64, ref, kind string, amount, balanceAfter int64) error {
+// AppendMachineTx 追加机器账户流水（Hash field=auditSK，追加序=时间序）。
+// 键 tx:mach:<machine_hash>；UserID 字段记触发来源卡 id（归因用，可为 0）。
+// 追加失败由调用方记日志（D1=A）。
+func (s *Store) AppendMachineTx(ctx context.Context, machineHash string, cardID int64, ref, kind string, amount, balanceAfter int64) error {
 	id, err := s.cli.WithContext(ctx).INCR(keySeq + "tx")
 	if err != nil {
 		return err
@@ -31,7 +33,7 @@ func (s *Store) AppendTx(ctx context.Context, cardID int64, ref, kind string, am
 		ID: id, UserID: cardID, TaskID: ref, Kind: kind,
 		Amount: amount, BalanceAfter: balanceAfter, CreatedAt: s.Now(),
 	}
-	_, err = s.cli.WithContext(ctx).HSET(keyTx+itoa(cardID), auditSK(s.Now().Unix()), mustMarshal(t))
+	_, err = s.cli.WithContext(ctx).HSET(keyTx+"mach:"+machineHash, auditSK(s.Now().Unix()), mustMarshal(t))
 	return err
 }
 
@@ -43,9 +45,9 @@ func (s *Store) ImportTx(ctx context.Context, t CreditTx) error {
 	return err
 }
 
-// ListTx 读某卡整条流水（HScanPage 基表 Query，sk 升序=时间升序）。
-func (s *Store) ListTx(ctx context.Context, cardID int64) ([]CreditTx, error) {
-	key := keyTx + itoa(cardID)
+// ListMachineTx 读某机器整条流水（HScanPage 基表 Query，sk 升序=时间升序）。
+func (s *Store) ListMachineTx(ctx context.Context, machineHash string) ([]CreditTx, error) {
+	key := keyTx + "mach:" + machineHash
 	out := make([]CreditTx, 0, 64)
 	var start map[string]types.AttributeValue
 	for pages := 0; pages < 100; pages++ {

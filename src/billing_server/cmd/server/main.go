@@ -43,8 +43,12 @@ func main() {
 	if st.Pepper == "" {
 		log.Fatalf("CARD_PEPPER 未配置（env 或 config.yaml card_pepper）")
 	}
-	if err := st.EnsureAdmin(ctx0, cfg.AdminToken); err != nil {
-		log.Fatalf("ensure admin: %v", err)
+	if err := st.EnsureRoot(ctx0, cfg.RootPassword); err != nil {
+		log.Fatalf("ensure root: %v", err)
+	}
+	sessionKey := cfg.SessionKey
+	if sessionKey == "" {
+		sessionKey = st.Pepper // 未单独配置会话密钥时回落卡胡椒(同属服务端保密串)
 	}
 
 	tosUp, err := tosstore.New(cfg.TOS.Endpoint, cfg.TOS.Region, cfg.TOS.AK, cfg.TOS.SK, cfg.TOS.Bucket)
@@ -63,7 +67,7 @@ func main() {
 	w := worker.New(st, reg, cfg.ResultDir)
 	go w.Run(ctx)
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: httpserver.New(st, cfg.SrcDir, reg).Handler()}
+	srv := &http.Server{Addr: cfg.Listen, Handler: httpserver.New(st, cfg.SrcDir, reg, []byte(sessionKey)).Handler()}
 	go func() {
 		<-ctx.Done()
 		srv.Shutdown(context.Background())

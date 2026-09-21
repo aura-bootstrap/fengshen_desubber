@@ -1,23 +1,28 @@
-// Package ddbstore 单表 redimo 存储：admin 用户/卡账户/任务/流水/限频/审计。
-// 取代原 SQLite 版 internal/store。卡号即账户：余额在 card JSON 内，单键 CAS 为提交点。
+// Package ddbstore 单表 redimo 存储：admin 用户/卡账户/机器账户/任务/流水/限频/审计。
+// 取代原 SQLite 版 internal/store。点数记在机器账户：卡=一次性充值券，激活即核销转账，
+// 余额在 mach JSON 内，单键 CAS 为提交点。
 //
 // 键族（命名空间 fengshen-desubber:，各键族互不相交）：
 //
-//	user:<token>           管理员 JSON（String+meta，仅 is_admin 账号）
+//	user:<token>           旧 token 管理员 JSON（已废，由 acct: 取代）
+//	acct:<username>        管理员账户 JSON（String+meta；root 全功能，admin 仅业务）
 //	card:<hash>            卡账户 JSON（String+meta；hash=HMAC-SHA256(pepper,归一化卡面)）
 //	cardid:<id>            卡 id → hash 二级键（String+meta）
 //	cardidx:<batch>        批次索引（Hash，field=hash12，value=status）
+//	mach:<machine_hash>    机器账户 JSON（String+meta；余额唯一权威）
 //	seq:<name>             计数器（INCR）
 //	task:<uuid>            任务 JSON（String+meta）
 //	queue:current          待处理任务 id 列表 JSON（整值 CAS）
 //	proc:current           处理中任务 id 列表 JSON（整值 CAS）
-//	tx:<card_id>           资金流水（Hash，field=ts#seq#rand，sk 字节序=时间序）
+//	tx:mach:<machine_hash> 资金流水（Hash，field=ts#seq#rand，sk 字节序=时间序）
+//	tx:<card_id>           旧模型卡流水（迁移遗留，只读）
 //	rl:<scope>:<id>:<win>  限频窗口计数（INCR，TTL 2×window）
 //	rl:fail:<scope>:<id>   连败锁 JSON（整值 CAS）
 //	audit:<scope>          审计链（Hash 只增）
 //
-// 资金一致性：单键 CAS 为提交点（余额在 card JSON 内），流水/审计为追加留痕，
-// 追加失败仅记日志不回滚（与 slicer D1=A 一致）。
+// 资金一致性：单键 CAS 为提交点（余额在 mach JSON 内），流水/审计为追加留痕，
+// 追加失败仅记日志不回滚（与 slicer D1=A 一致）。核销转账=先入账后 CAS 卡，
+// CAS 失败者冲正，并发下净入账恰好一份卡面点数。
 package ddbstore
 
 import (
@@ -38,10 +43,12 @@ import (
 const keyNS = "fengshen-desubber:"
 
 const (
-	keyUser     = keyNS + "user:"    // user:<token>
+	keyUser     = keyNS + "user:"    // user:<token>(旧 token 管理员,已废,残留行不影响)
+	keyAcct     = keyNS + "acct:"    // acct:<username>(管理员账户,root/admin 双角色)
 	keyCard     = keyNS + "card:"    // card:<hash>
 	keyCardID   = keyNS + "cardid:"  // cardid:<id>
 	keyCardIdx  = keyNS + "cardidx:" // cardidx:<batch>
+	keyMach     = keyNS + "mach:"    // mach:<machine_hash>
 	keySeq      = keyNS + "seq:"     // seq:<name>
 	keyTask     = keyNS + "task:"    // task:<uuid>
 	keyQueue    = keyNS + "queue:current"
@@ -57,6 +64,7 @@ var (
 	ErrInsufficientBalance = errors.New("insufficient balance")
 	ErrCardNotFound        = errors.New("card not found")
 	ErrCardRevoked         = errors.New("card revoked")
+	ErrCardRedeemed        = errors.New("card redeemed")
 	ErrDuplicate           = errors.New("duplicate")
 )
 

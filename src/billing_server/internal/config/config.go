@@ -8,11 +8,12 @@ import (
 )
 
 type Config struct {
-	Listen     string `yaml:"listen"`      // e.g. ":18080"
-	SrcDir     string `yaml:"src_dir"`     // 源视频暂存目录
-	ResultDir  string `yaml:"result_dir"`  // 结果视频目录
-	AdminToken string `yaml:"admin_token"` // 管理员 token，启动时确保对应 admin 用户存在
-	CardPepper string `yaml:"card_pepper"` // 卡哈希 HMAC 密钥（env CARD_PEPPER 优先）
+	Listen       string `yaml:"listen"`        // e.g. ":18080"
+	SrcDir       string `yaml:"src_dir"`       // 源视频暂存目录
+	ResultDir    string `yaml:"result_dir"`    // 结果视频目录
+	RootPassword string `yaml:"root_password"` // 超级管理员初始密码,启动时幂等种入 root(空=不种)
+	SessionKey   string `yaml:"session_key"`   // 管理会话 HMAC 密钥(空=回落 card_pepper)
+	CardPepper   string `yaml:"card_pepper"`   // 卡哈希 HMAC 密钥（env CARD_PEPPER 优先）
 
 	TOS TOSConfig `yaml:"tos"`
 	LAS LASConfig `yaml:"las"`
@@ -42,7 +43,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	if c.Listen == "" || c.AdminToken == "" ||
+	if c.Listen == "" ||
 		c.TOS.AK == "" || c.TOS.SK == "" || c.TOS.Bucket == "" ||
 		c.LAS.BaseURL == "" || c.LAS.APIKey == "" {
 		return nil, fmt.Errorf("config missing required fields")

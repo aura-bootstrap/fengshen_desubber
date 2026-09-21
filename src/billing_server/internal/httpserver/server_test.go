@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +22,8 @@ const testMachine = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789a
 
 // testMachine2 另一台机器（异机冲突用）。
 const testMachine2 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+const testRootPassword = "root-pass-123"
 
 type fakeUploader struct{}
 
@@ -55,8 +56,9 @@ type env struct {
 	srv       *httptest.Server
 	srcDir    string
 	resultDir string
-	userTok   string
-	userID    int64
+	adminTok  string // root 会话令牌
+	userTok   string // 卡面（用户凭证）
+	userID    int64  // 卡 id
 	machine   string // 已激活卡的绑定机器码
 }
 
@@ -72,7 +74,7 @@ func setup(t *testing.T, op provider.Operator) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.EnsureAdmin(context.Background(), "admintoken"); err != nil {
+	if err := st.EnsureRoot(context.Background(), testRootPassword); err != nil {
 		t.Fatal(err)
 	}
 	// 平台注册表：fake 上传 + 注入算子，注册为 "las" 默认平台
@@ -82,11 +84,14 @@ func setup(t *testing.T, op provider.Operator) *env {
 	e := &env{st: st, srcDir: filepath.Join(dir, "src"), resultDir: filepath.Join(dir, "result"), machine: testMachine}
 	os.MkdirAll(e.srcDir, 0o755)
 	os.MkdirAll(e.resultDir, 0o755)
-	e.srv = httptest.NewServer(New(st, e.srcDir, reg).Handler())
+	e.srv = httptest.NewServer(New(st, e.srcDir, reg, []byte("test-session-key")).Handler())
 	t.Cleanup(e.srv.Close)
 
-	// admin 创建用户并充值 5
-	code, b := e.do(t, "POST", "/v1/admin/users", "admintoken",
+	// root 登录拿会话令牌
+	e.adminTok = e.login(t, "root", testRootPassword)
+
+	// admin 建卡（0 点）→ 激活绑定机器码（核销 0 点、建机器账户）→ 给机器充 5 点
+	code, b := e.do(t, "POST", "/v1/admin/users", e.adminTok,
 		map[string]any{"name": "alice"})
 	if code != 201 {
 		t.Fatalf("create user: %d %s", code, b)
@@ -98,16 +103,15 @@ func setup(t *testing.T, op provider.Operator) *env {
 	json.Unmarshal(b, &u)
 	e.userID, e.userTok = u.UserID, u.Token
 
-	code, b = e.do(t, "POST", "/v1/admin/credits", "admintoken",
-		map[string]any{"user_id": e.userID, "amount": 5})
-	if code != 200 {
-		t.Fatalf("grant: %d %s", code, b)
-	}
-
-	// 新卡 inactive：先激活绑定机器码
 	code, b = e.doMachine(t, "POST", "/v1/activate", e.userTok, e.machine, nil)
 	if code != 200 {
 		t.Fatalf("activate: %d %s", code, b)
+	}
+
+	code, b = e.do(t, "POST", "/v1/admin/credits", e.adminTok,
+		map[string]any{"user_id": e.userID, "amount": 5})
+	if code != 200 {
+		t.Fatalf("grant: %d %s", code, b)
 	}
 
 	// worker 后台跑
@@ -119,6 +123,22 @@ func setup(t *testing.T, op provider.Operator) *env {
 		go w.Run(ctx)
 	}
 	return e
+}
+
+// login 调 /v1/admin/login 拿会话令牌。
+func (e *env) login(t *testing.T, username, password string) string {
+	t.Helper()
+	code, b := e.doMachine(t, "POST", "/v1/admin/login", "", "", map[string]any{
+		"username": username, "password": password,
+	})
+	if code != 200 {
+		t.Fatalf("login %s: %d %s", username, code, b)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	json.Unmarshal(b, &out)
+	return out.Token
 }
 
 func (e *env) do(t *testing.T, method, path, token string, body any) (int, []byte) {
@@ -137,7 +157,9 @@ func (e *env) doMachine(t *testing.T, method, path, token, machine string, body 
 		rdr = bytes.NewReader(nil)
 	}
 	req, _ := http.NewRequest(method, e.srv.URL+path, rdr)
-	req.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if machine != "" {
 		req.Header.Set("X-Machine-Hash", machine)
 	}
@@ -299,21 +321,183 @@ func TestAuthAndAdminGuard(t *testing.T) {
 	}
 	json.Unmarshal(b, &created)
 
-	code, _ = e.do(t, "GET", "/v1/tasks/"+created.TaskID, "admintoken", nil)
+	code, _ = e.do(t, "GET", "/v1/tasks/"+created.TaskID, e.adminTok, nil)
 	if code != 200 {
 		t.Fatalf("admin should see task, got %d", code)
 	}
-
-	fmt.Println("ok")
 }
 
-// TestActivateFlow 激活/机器码绑定全链路：
-// inactive 卡拒业务→激活→同机幂等→异机 409→机器码不符 403→admin 解绑→重新激活。
+// TestAdminSessionFlow 会话体系全链路：登录→me→建号→角色闸→禁用/重置/删除→登出吊销。
+func TestAdminSessionFlow(t *testing.T) {
+	e := setup(t, nil)
+
+	// 错误密码 → 401（用一次性用户名，避免把 root@IP 打进连败锁）
+	code, _ := e.doMachine(t, "POST", "/v1/admin/login", "", "", map[string]any{
+		"username": "ghost-user", "password": "wrong-pass-1",
+	})
+	if code != http.StatusUnauthorized {
+		t.Fatalf("bad login want 401, got %d", code)
+	}
+
+	// me：root 角色回显
+	code, b := e.do(t, "GET", "/v1/admin/me", e.adminTok, nil)
+	if code != 200 {
+		t.Fatalf("me: %d %s", code, b)
+	}
+	var me struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
+	}
+	json.Unmarshal(b, &me)
+	if me.Username != "root" || me.Role != "root" {
+		t.Fatalf("me: %+v", me)
+	}
+
+	// root 建普通管理员
+	code, b = e.do(t, "POST", "/v1/admin/accounts", e.adminTok, map[string]any{
+		"username": "adm_ui1", "password": "admin-pass-1",
+	})
+	if code != 201 {
+		t.Fatalf("create account: %d %s", code, b)
+	}
+	// 撞名 → 409
+	code, _ = e.do(t, "POST", "/v1/admin/accounts", e.adminTok, map[string]any{
+		"username": "adm_ui1", "password": "admin-pass-1",
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("dup account want 409, got %d", code)
+	}
+	// 非法用户名/密码 → 400
+	code, _ = e.do(t, "POST", "/v1/admin/accounts", e.adminTok, map[string]any{
+		"username": "ab", "password": "admin-pass-1",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad username want 400, got %d", code)
+	}
+
+	admTok := e.login(t, "adm_ui1", "admin-pass-1")
+
+	// admin 不可见 accounts（root only）
+	code, _ = e.do(t, "GET", "/v1/admin/accounts", admTok, nil)
+	if code != http.StatusForbidden {
+		t.Fatalf("admin list accounts want 403, got %d", code)
+	}
+	// admin 可做业务（发卡）
+	code, b = e.do(t, "POST", "/v1/admin/cards/generate", admTok,
+		map[string]any{"count": 1, "credits": 1, "batch": "adm-flow"})
+	if code != 201 {
+		t.Fatalf("admin generate cards: %d %s", code, b)
+	}
+
+	// root 列表含两个账号
+	code, b = e.do(t, "GET", "/v1/admin/accounts", e.adminTok, nil)
+	if code != 200 {
+		t.Fatalf("root list accounts: %d %s", code, b)
+	}
+	var list struct {
+		Accounts []ddbstore.Account `json:"accounts"`
+	}
+	json.Unmarshal(b, &list)
+	if len(list.Accounts) != 2 {
+		t.Fatalf("accounts: %+v", list.Accounts)
+	}
+
+	// root 账号不可经接口改动
+	code, _ = e.do(t, "POST", "/v1/admin/accounts/root/status", e.adminTok, map[string]any{
+		"status": "disabled", "version": 1,
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("mutate root want 400, got %d", code)
+	}
+
+	// 版本不符 → 409
+	code, _ = e.do(t, "POST", "/v1/admin/accounts/adm_ui1/status", e.adminTok, map[string]any{
+		"status": "disabled", "version": 99,
+	})
+	if code != http.StatusConflict {
+		t.Fatalf("version mismatch want 409, got %d", code)
+	}
+
+	// 禁用（version 1 → 2）：在途会话即刻 403
+	code, _ = e.do(t, "POST", "/v1/admin/accounts/adm_ui1/status", e.adminTok, map[string]any{
+		"status": "disabled", "version": 1,
+	})
+	if code != 200 {
+		t.Fatalf("disable: %d", code)
+	}
+	code, _ = e.do(t, "GET", "/v1/admin/me", admTok, nil)
+	if code != http.StatusForbidden {
+		t.Fatalf("disabled session want 403, got %d", code)
+	}
+
+	// 启用（version 2 → 3）
+	code, _ = e.do(t, "POST", "/v1/admin/accounts/adm_ui1/status", e.adminTok, map[string]any{
+		"status": "active", "version": 2,
+	})
+	if code != 200 {
+		t.Fatalf("enable: %d", code)
+	}
+
+	// 重置密码（version 3 → 4）：旧密码失效
+	code, _ = e.do(t, "POST", "/v1/admin/accounts/adm_ui1/password", e.adminTok, map[string]any{
+		"password": "admin-pass-2", "version": 3,
+	})
+	if code != 200 {
+		t.Fatalf("reset password: %d", code)
+	}
+	code, _ = e.doMachine(t, "POST", "/v1/admin/login", "", "", map[string]any{
+		"username": "adm_ui1", "password": "admin-pass-1",
+	})
+	if code != http.StatusUnauthorized {
+		t.Fatalf("old password after reset want 401, got %d", code)
+	}
+	admTok = e.login(t, "adm_ui1", "admin-pass-2")
+
+	// 改密：本人验旧密改新密（version 4 → 5）
+	code, _ = e.do(t, "POST", "/v1/admin/password", admTok, map[string]any{
+		"old_password": "admin-pass-2", "new_password": "admin-pass-3",
+	})
+	if code != 200 {
+		t.Fatalf("change password: %d", code)
+	}
+	code, _ = e.do(t, "GET", "/v1/admin/me", admTok, nil)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("session after password change want 401, got %d", code)
+	}
+
+	// 删除（version 5）
+	code, _ = e.do(t, "POST", "/v1/admin/accounts/adm_ui1/delete", e.adminTok, map[string]any{
+		"version": 5,
+	})
+	if code != 200 {
+		t.Fatalf("delete: %d", code)
+	}
+	code, _ = e.doMachine(t, "POST", "/v1/admin/login", "", "", map[string]any{
+		"username": "adm_ui1", "password": "admin-pass-3",
+	})
+	if code != http.StatusUnauthorized {
+		t.Fatalf("deleted account login want 401, got %d", code)
+	}
+
+	// 登出：bump 纪元，本令牌即刻失效
+	code, _ = e.do(t, "POST", "/v1/admin/logout", e.adminTok, nil)
+	if code != 200 {
+		t.Fatalf("logout: %d", code)
+	}
+	code, _ = e.do(t, "GET", "/v1/admin/me", e.adminTok, nil)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("me after logout want 401, got %d", code)
+	}
+}
+
+// TestActivateFlow 激活=核销全链路：
+// inactive 卡拒业务→激活（点数转机器账户）→同机幂等→异机 409→机器码不符 403
+// →redeemed 卡拒解绑→吊销拒激活→恢复后绑定机可用。
 func TestActivateFlow(t *testing.T) {
 	e := setup(t, nil)
 
 	// setup 已激活 userTok；另发一张未激活新卡
-	code, b := e.do(t, "POST", "/v1/admin/cards/generate", "admintoken",
+	code, b := e.do(t, "POST", "/v1/admin/cards/generate", e.adminTok,
 		map[string]any{"count": 1, "credits": 3, "batch": "act-test"})
 	if code != 201 {
 		t.Fatalf("generate: %d %s", code, b)
@@ -338,7 +522,7 @@ func TestActivateFlow(t *testing.T) {
 		t.Fatalf("bad machine: %d %s", code, b)
 	}
 
-	// 激活成功
+	// 激活成功：3 点转入机器账户，卡置 redeemed
 	code, b = e.doMachine(t, "POST", "/v1/activate", card, testMachine, nil)
 	if code != 200 {
 		t.Fatalf("activate: %d %s", code, b)
@@ -349,14 +533,18 @@ func TestActivateFlow(t *testing.T) {
 		Status      string `json:"status"`
 	}
 	json.Unmarshal(b, &act)
-	if act.Credits != 3 || act.MachineHash != testMachine || act.Status != "active" {
+	if act.Credits != 3 || act.MachineHash != testMachine || act.Status != "redeemed" {
 		t.Fatalf("activate resp: %+v", act)
 	}
 
-	// 同机幂等
-	code, _ = e.doMachine(t, "POST", "/v1/activate", card, testMachine, nil)
+	// 同机幂等（不多入账）
+	code, b = e.doMachine(t, "POST", "/v1/activate", card, testMachine, nil)
 	if code != 200 {
 		t.Fatalf("re-activate same machine: %d", code)
+	}
+	json.Unmarshal(b, &act)
+	if act.Credits != 3 {
+		t.Fatalf("idempotent activate double-credited: %+v", act)
 	}
 
 	// 异机 → 409 card_bound_other
@@ -381,23 +569,15 @@ func TestActivateFlow(t *testing.T) {
 		t.Fatalf("bound machine balance: %d %s", code, b)
 	}
 
-	// admin 按卡面解绑 → 回到 inactive，旧机器码失效，可换机重激活
-	code, b = e.do(t, "POST", "/v1/admin/cards/unbind", "admintoken",
+	// redeemed 卡拒解绑（点数已转机器账户，解绑不能复活卡面）→ 409
+	code, b = e.do(t, "POST", "/v1/admin/cards/unbind", e.adminTok,
 		map[string]any{"code": card})
-	if code != 200 {
-		t.Fatalf("unbind: %d %s", code, b)
-	}
-	code, b = e.doMachine(t, "GET", "/v1/balance", card, testMachine, nil)
-	if code != http.StatusForbidden || !bytes.Contains(b, []byte("card_not_activated")) {
-		t.Fatalf("after unbind balance: %d %s", code, b)
-	}
-	code, _ = e.doMachine(t, "POST", "/v1/activate", card, testMachine2, nil)
-	if code != 200 {
-		t.Fatalf("re-activate after unbind: %d", code)
+	if code != http.StatusConflict || !bytes.Contains(b, []byte("card_redeemed")) {
+		t.Fatalf("redeemed unbind want 409, got %d %s", code, b)
 	}
 
 	// 吊销卡：激活 403 card_revoked；解绑 400
-	code, _ = e.do(t, "POST", "/v1/admin/cards/revoke", "admintoken",
+	code, _ = e.do(t, "POST", "/v1/admin/cards/revoke", e.adminTok,
 		map[string]any{"card": card})
 	if code != 200 {
 		t.Fatalf("revoke: %d", code)
@@ -406,10 +586,28 @@ func TestActivateFlow(t *testing.T) {
 	if code != http.StatusForbidden || !bytes.Contains(b, []byte("card_revoked")) {
 		t.Fatalf("revoked activate: %d %s", code, b)
 	}
-	code, _ = e.do(t, "POST", "/v1/admin/cards/unbind", "admintoken",
+	code, _ = e.do(t, "POST", "/v1/admin/cards/unbind", e.adminTok,
 		map[string]any{"code": card})
 	if code != http.StatusBadRequest {
 		t.Fatalf("revoked unbind want 400, got %d", code)
+	}
+
+	// 恢复：已核销卡回 redeemed（机器绑定保留），绑定机余额仍 3
+	code, _ = e.do(t, "POST", "/v1/admin/cards/unrevoke", e.adminTok,
+		map[string]any{"card": card})
+	if code != 200 {
+		t.Fatalf("unrevoke: %d", code)
+	}
+	code, b = e.doMachine(t, "GET", "/v1/balance", card, testMachine, nil)
+	if code != 200 {
+		t.Fatalf("balance after unrevoke: %d %s", code, b)
+	}
+	var bal struct {
+		Credits int64 `json:"credits"`
+	}
+	json.Unmarshal(b, &bal)
+	if bal.Credits != 3 {
+		t.Fatalf("balance after unrevoke want 3, got %d", bal.Credits)
 	}
 }
 

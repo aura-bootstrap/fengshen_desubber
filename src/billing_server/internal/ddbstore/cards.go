@@ -12,13 +12,19 @@ import (
 )
 
 const (
-	CardInactive = "inactive" // 新卡未激活（未绑定机器码）
-	CardActive   = "active"   // 已激活（已绑定机器码）
+	CardInactive = "inactive" // 新卡未激活（未核销，点数还在卡面上）
+	CardRedeemed = "redeemed" // 已核销（点数已转入机器账户，卡面仅作凭证）
 	CardRevoked  = "revoked"  // 吊销
+	// CardActive 旧模型遗留状态（余额在卡上）。不再产生，
+	// 读取路径（auth/activate）命中时懒迁移为 redeemed。
+	CardActive = "active"
 )
 
-// Card 卡账户：卡面即凭证，余额在卡上（落库 JSON 字段序固定=SETCAS 基线前提）。
-// MachineHash 空 = 未绑定机器；BoundAt 为首次绑定时间（unix 秒）。
+// Card 卡账户：卡=一次性充值券，激活即核销，点数转入机器账户（见 machines.go）。
+// 核销后卡面仅作调用凭证（MachineHash 映射保留）；Balance 核销后恒 0，余额查机器账户。
+// MachineHash 空 = 未绑定机器；BoundAt 为首次绑定时间（unix 秒）；
+// Credited = 点数已转入机器账户（核销与迁移的完成标记）。
+// （落库 JSON 字段序固定=SETCAS 基线前提；新增字段只追加在末尾。）
 type Card struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
@@ -30,6 +36,7 @@ type Card struct {
 	MachineHash string `json:"machine_hash"` // 空=未绑定
 	BoundAt     int64  `json:"bound_at"`
 	CreatedAt   int64  `json:"created_at"`
+	Credited    bool   `json:"credited"`
 }
 
 // CreateCard 发卡（明文卡面仅由调用方返回一次，库中只存哈希）。新卡默认 inactive。
@@ -188,80 +195,62 @@ func (s *Store) casCard(ctx context.Context, c *Card, mutate func(*Card)) (bool,
 	return false, nil
 }
 
-// RechargeCard 充值（只能给卡加点）。余额 CAS 为提交点，流水/审计追加留痕。
-func (s *Store) RechargeCard(ctx context.Context, cardID, amount int64, ref string) (int64, error) {
-	c, err := s.GetCardByID(ctx, cardID)
-	if err != nil {
-		return 0, err
+// EnsureRedeemed 核销/迁移统一入口：把卡面点数转入机器账户并把卡置 redeemed。
+// 幂等：已 redeemed 且已 Credited 直接返回；redeemed 但未 Credited（旧迁移半成品）补转入。
+// 返回机器最新余额。并发安全：入账在前、核销 CAS 在后，CAS 失败者冲正已入账点数，
+// 无论多少并发激活同一张卡，机器账户净入账恰好一份卡面点数。
+func (s *Store) EnsureRedeemed(ctx context.Context, c *Card, machineHash string) (int64, error) {
+	if c.Status == CardRedeemed && c.Credited {
+		m, err := s.GetMachine(ctx, machineHash)
+		if err != nil {
+			return 0, err
+		}
+		return m.Balance, nil
 	}
-	ok, err := s.casCard(ctx, c, func(n *Card) { n.Balance += amount })
-	if err != nil {
-		return 0, err
+	moved := c.Balance
+	if moved > 0 {
+		if _, err := s.CreditMachine(ctx, machineHash, moved, "grant", "redeem", c.ID); err != nil {
+			return 0, err
+		}
 	}
-	if !ok {
-		return 0, errors.New("recharge: cas conflict")
-	}
-	_ = s.AppendTx(ctx, c.ID, ref, "grant", amount, c.Balance)
-	_ = s.AppendAudit(ctx, AuditEntry{Actor: "admin", Action: "recharge", Target: c.CodeMasked, Detail: fmt.Sprintf("+%d ref=%s", amount, ref), OK: true})
-	return c.Balance, nil
-}
-
-// DebitCard 扣费：卡须 active 且余额充足。成功返回新余额。
-func (s *Store) DebitCard(ctx context.Context, c *Card, amount int64, kind, ref string) (int64, error) {
-	if c.Status != CardActive {
-		return c.Balance, ErrCardRevoked
-	}
-	if c.Balance < amount {
-		return c.Balance, ErrInsufficientBalance
-	}
-	ok, err := s.casCard(ctx, c, func(n *Card) { n.Balance -= amount })
-	if err != nil {
-		return 0, err
-	}
-	if !ok {
-		return c.Balance, ErrInsufficientBalance // 并发冲突按不足处理，调用方重读重试
-	}
-	_ = s.AppendTx(ctx, c.ID, ref, kind, amount, c.Balance)
-	return c.Balance, nil
-}
-
-// RefundCard 退款（不要求 active：吊销卡仍须能收退款）。
-func (s *Store) RefundCard(ctx context.Context, cardID, amount int64, ref string) (int64, error) {
-	c, err := s.GetCardByID(ctx, cardID)
-	if err != nil {
-		return 0, err
-	}
-	ok, err := s.casCard(ctx, c, func(n *Card) { n.Balance += amount })
-	if err != nil {
-		return 0, err
-	}
-	if !ok {
-		return 0, errors.New("refund: cas conflict")
-	}
-	_ = s.AppendTx(ctx, c.ID, ref, "refund", amount, c.Balance)
-	return c.Balance, nil
-}
-
-// BindCard 激活绑定：inactive 卡 CAS 绑定机器码并转 active，写审计 bind。
-// 调用方须已校验 c.Status == CardInactive；并发冲突返回错误由调用方重读重试。
-func (s *Store) BindCard(ctx context.Context, c *Card, machineHash string) error {
 	ok, err := s.casCard(ctx, c, func(n *Card) {
-		n.Status = CardActive
-		n.MachineHash = machineHash
-		n.BoundAt = s.Now().Unix()
+		n.Status = CardRedeemed
+		if n.MachineHash == "" {
+			n.MachineHash = machineHash
+			n.BoundAt = s.Now().Unix()
+		}
+		n.Balance = 0
+		n.Credited = true
 	})
 	if err != nil {
-		return err
+		s.uncreditMachine(ctx, machineHash, moved)
+		return 0, err
 	}
 	if !ok {
-		return errors.New("bind: cas conflict")
+		// 并发核销已抢先完成：冲正本进程多入账的那份，按已成功处理
+		s.uncreditMachine(ctx, machineHash, moved)
+		fresh, rerr := s.GetCardByHash(ctx, c.Hash)
+		if rerr != nil {
+			return 0, rerr
+		}
+		*c = *fresh
+		if c.Status != CardRedeemed || c.MachineHash != machineHash {
+			return 0, errors.New("redeem: cas conflict")
+		}
+	} else {
+		_ = s.AppendAudit(ctx, AuditEntry{Actor: "card", Action: "redeem", Target: c.CodeMasked,
+			Detail: fmt.Sprintf("machine=%s moved=%d", machineHash, moved), OK: true})
 	}
-	_ = s.AppendAudit(ctx, AuditEntry{Actor: "card", Action: "bind", Target: c.CodeMasked, Detail: "machine=" + machineHash, OK: true})
-	return nil
+	m, err := s.GetMachine(ctx, machineHash)
+	if err != nil {
+		return 0, err
+	}
+	return m.Balance, nil
 }
 
-// UnbindCard 解绑机器码：清绑定信息并回到 inactive（revoked 卡拒绝），写审计 unbind。
-// 已是未绑定的 inactive 卡幂等通过。
+// UnbindCard 解绑机器码：仅对旧模型 active 卡有效（清绑定回 inactive，点数还在卡面）。
+// redeemed 卡点数已转入机器账户，解绑不能复活卡面，返回 ErrCardRedeemed；
+// revoked 卡拒绝；未绑定的 inactive 卡幂等通过。
 func (s *Store) UnbindCard(ctx context.Context, hash, actor string) error {
 	c, err := s.GetCardByHash(ctx, hash)
 	if err != nil {
@@ -269,6 +258,9 @@ func (s *Store) UnbindCard(ctx context.Context, hash, actor string) error {
 	}
 	if c.Status == CardRevoked {
 		return ErrCardRevoked
+	}
+	if c.Status == CardRedeemed {
+		return ErrCardRedeemed
 	}
 	if c.Status == CardInactive && c.MachineHash == "" {
 		return nil
@@ -289,19 +281,23 @@ func (s *Store) UnbindCard(ctx context.Context, hash, actor string) error {
 }
 
 // SetCardStatus 吊销/恢复（同步批次索引 + 审计）。
-// 恢复到非吊销态一律落 inactive：机器绑定随吊销失效，须重新激活。
+// 吊销保留 MachineHash（凭证→机器映射，恢复后仍可用）。
+// 恢复目标态按 Credited 区分：点数已转机器的回 redeemed，未核销的回 inactive。
 func (s *Store) SetCardStatus(ctx context.Context, hash, status, actor string) error {
 	c, err := s.GetCardByHash(ctx, hash)
 	if err != nil {
 		return err
+	}
+	if status == CardInactive && c.Credited {
+		status = CardRedeemed
 	}
 	if c.Status == status {
 		return nil
 	}
 	ok, err := s.casCard(ctx, c, func(n *Card) {
 		n.Status = status
-		if status != CardActive {
-			// 非 active 态不允许残留机器绑定
+		if status == CardInactive {
+			// 回到未核销态才允许清绑定（点数随卡面重新可激活）
 			n.MachineHash = ""
 			n.BoundAt = 0
 		}

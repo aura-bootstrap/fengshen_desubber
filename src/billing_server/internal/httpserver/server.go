@@ -25,43 +25,55 @@ type ctxKey int
 
 const ctxPrincipal ctxKey = 0
 
-// principal 调用主体：Admin（user: 键族 token）或 Card（卡面即凭证）。
+// principal 调用主体：Admin（acct: 键族账户，会话令牌）或 Card（卡面即凭证）。
 type principal struct {
-	Admin *ddbstore.User
+	Admin *ddbstore.Account
 	Card  *ddbstore.Card
 }
 
 type Server struct {
-	st     *ddbstore.Store
-	srcDir string
-	reg    *provider.Registry
+	st         *ddbstore.Store
+	srcDir     string
+	reg        *provider.Registry
+	sessionKey []byte
 }
 
-func New(st *ddbstore.Store, srcDir string, reg *provider.Registry) *Server {
-	return &Server{st: st, srcDir: srcDir, reg: reg}
+func New(st *ddbstore.Store, srcDir string, reg *provider.Registry, sessionKey []byte) *Server {
+	return &Server{st: st, srcDir: srcDir, reg: reg, sessionKey: sessionKey}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// 冻结协议：路径/方法/请求响应字段不变
-	mux.Handle("POST /v1/tasks", s.auth(false, s.createTask))
-	mux.Handle("GET /v1/tasks/{id}", s.auth(false, s.getTask))
-	mux.Handle("GET /v1/tasks/{id}/download", s.auth(false, s.download))
-	mux.Handle("GET /v1/balance", s.auth(false, s.balance))
+	mux.Handle("POST /v1/tasks", s.auth("", s.createTask))
+	mux.Handle("GET /v1/tasks/{id}", s.auth("", s.getTask))
+	mux.Handle("GET /v1/tasks/{id}/download", s.auth("", s.download))
+	mux.Handle("GET /v1/balance", s.auth("", s.balance))
 	// 激活（卡面 + 机器码绑定）：不走 auth 中间件，自行解析卡面
 	mux.Handle("POST /v1/activate", http.HandlerFunc(s.activate))
-	mux.Handle("POST /v1/admin/users", s.auth(true, s.createUser))
-	mux.Handle("POST /v1/admin/credits", s.auth(true, s.grant))
-	mux.Handle("GET /v1/admin/transactions", s.auth(true, s.transactions))
-	// 卡密（新增，不动旧路由）
-	mux.Handle("POST /v1/admin/cards/generate", s.auth(true, s.generateCards))
-	mux.Handle("POST /v1/admin/cards/recharge", s.auth(true, s.rechargeCard))
-	mux.Handle("POST /v1/admin/cards/revoke", s.auth(true, s.revokeCard))
-	mux.Handle("POST /v1/admin/cards/unrevoke", s.auth(true, s.unrevokeCard))
-	mux.Handle("POST /v1/admin/cards/unbind", s.auth(true, s.unbindCard))
-	mux.Handle("GET /v1/admin/cards/audit", s.auth(true, s.cardAudit))
-	mux.Handle("GET /v1/admin/cards", s.auth(true, s.listCards))
-	mux.Handle("GET /v1/cards/{card}/status", s.auth(false, s.cardStatus))
+	// 管理员账号与会话：login 公开，me/logout/password 两角色，accounts* 仅 root
+	mux.Handle("POST /v1/admin/login", http.HandlerFunc(s.login))
+	mux.Handle("GET /v1/admin/me", s.auth(ddbstore.RoleAdmin, s.me))
+	mux.Handle("POST /v1/admin/logout", s.auth(ddbstore.RoleAdmin, s.logout))
+	mux.Handle("POST /v1/admin/password", s.auth(ddbstore.RoleAdmin, s.changePassword))
+	mux.Handle("GET /v1/admin/accounts", s.auth(ddbstore.RoleRoot, s.listAccounts))
+	mux.Handle("POST /v1/admin/accounts", s.auth(ddbstore.RoleRoot, s.createAccount))
+	mux.Handle("POST /v1/admin/accounts/{u}/status", s.auth(ddbstore.RoleRoot, s.setAccountStatus))
+	mux.Handle("POST /v1/admin/accounts/{u}/password", s.auth(ddbstore.RoleRoot, s.resetAccountPassword))
+	mux.Handle("POST /v1/admin/accounts/{u}/delete", s.auth(ddbstore.RoleRoot, s.deleteAccount))
+	// 业务管理（root/admin 皆可）
+	mux.Handle("POST /v1/admin/users", s.auth(ddbstore.RoleAdmin, s.createUser))
+	mux.Handle("POST /v1/admin/credits", s.auth(ddbstore.RoleAdmin, s.grant))
+	mux.Handle("GET /v1/admin/transactions", s.auth(ddbstore.RoleAdmin, s.transactions))
+	// 卡密（root/admin 皆可）
+	mux.Handle("POST /v1/admin/cards/generate", s.auth(ddbstore.RoleAdmin, s.generateCards))
+	mux.Handle("POST /v1/admin/cards/recharge", s.auth(ddbstore.RoleAdmin, s.rechargeCard))
+	mux.Handle("POST /v1/admin/cards/revoke", s.auth(ddbstore.RoleAdmin, s.revokeCard))
+	mux.Handle("POST /v1/admin/cards/unrevoke", s.auth(ddbstore.RoleAdmin, s.unrevokeCard))
+	mux.Handle("POST /v1/admin/cards/unbind", s.auth(ddbstore.RoleAdmin, s.unbindCard))
+	mux.Handle("GET /v1/admin/cards/audit", s.auth(ddbstore.RoleAdmin, s.cardAudit))
+	mux.Handle("GET /v1/admin/cards", s.auth(ddbstore.RoleAdmin, s.listCards))
+	mux.Handle("GET /v1/cards/{card}/status", s.auth("", s.cardStatus))
 	return mux
 }
 
@@ -85,31 +97,32 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
-// auth 解析 Bearer：admin token（user: 键族）优先，否则按卡面查卡。
-// 卡面撞库防护：auth 连败 10 次锁 30 分钟（按来源 IP）。
-// 卡身份附加机器码校验：卡须 active 且 X-Machine-Hash 等于卡上绑定值；
-// 机器码校验失败不计入 auth 连败锁（卡是真的）。
-func (s *Server) auth(adminOnly bool, next http.HandlerFunc) http.Handler {
+// auth 解析 Bearer：含 '.' 按会话令牌（HMAC 验签 + 账号/纪元/到期核对），
+// 否则按卡面查卡。role 为准入闸：""=卡或管理员皆可，"admin"=任一管理员，
+// "root"=仅超级管理员。
+// 卡面撞库防护：卡路径 auth 连败 10 次锁 30 分钟（按来源 IP）；
+// 会话验签失败不计入（HMAC 不可爆破）。机器码校验失败亦不计（卡是真的）。
+func (s *Server) auth(role string, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if tok == "" {
 			writeErr(w, http.StatusUnauthorized, "missing token")
 			return
 		}
-		ip := clientIP(r)
-		if rem, err := s.st.LockedFor(r.Context(), "auth", ip); err == nil && rem > 0 {
-			writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("locked, retry in %ds", rem))
-			return
-		}
-
 		var p *principal
-		if u, err := s.st.GetUserByToken(r.Context(), tok); err == nil {
-			p = &principal{Admin: u}
-		} else if !errors.Is(err, ddbstore.ErrNotFound) {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if p == nil {
+		if strings.Contains(tok, ".") {
+			a, code, msg := s.resolveSession(r, tok)
+			if a == nil {
+				writeErr(w, code, msg)
+				return
+			}
+			p = &principal{Admin: a}
+		} else {
+			ip := clientIP(r)
+			if rem, err := s.st.LockedFor(r.Context(), "auth", ip); err == nil && rem > 0 {
+				writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("locked, retry in %ds", rem))
+				return
+			}
 			c, err := s.st.GetCardByCode(r.Context(), tok)
 			if errors.Is(err, ddbstore.ErrCardNotFound) || errors.Is(err, cardkey.ErrNoPepper) {
 				if _, lerr := s.st.FailLock(r.Context(), "auth", ip, 10, 1800); lerr != nil {
@@ -126,24 +139,63 @@ func (s *Server) auth(adminOnly bool, next http.HandlerFunc) http.Handler {
 				writeErr(w, http.StatusForbidden, "card_revoked")
 				return
 			}
-			if c.Status != ddbstore.CardActive {
+			if c.Status != ddbstore.CardRedeemed && c.Status != ddbstore.CardActive {
 				writeErr(w, http.StatusForbidden, "card_not_activated")
 				return
 			}
-			if mh := r.Header.Get("X-Machine-Hash"); mh == "" || mh != c.MachineHash {
+			mh := r.Header.Get("X-Machine-Hash")
+			if mh == "" || mh != c.MachineHash {
 				writeErr(w, http.StatusForbidden, "machine_mismatch")
 				return
 			}
+			if c.Status != ddbstore.CardRedeemed || !c.Credited {
+				// 旧模型 active 卡/迁移半成品：懒迁移——点数转机器账户并置 redeemed
+				if _, err := s.st.EnsureRedeemed(r.Context(), c, mh); err != nil {
+					writeErr(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+			_ = s.st.ResetFail(r.Context(), "auth", ip)
 			p = &principal{Card: c}
 		}
-		_ = s.st.ResetFail(r.Context(), "auth", ip)
 
-		if adminOnly && (p.Admin == nil || !p.Admin.IsAdmin) {
-			writeErr(w, http.StatusForbidden, "admin only")
-			return
+		switch role {
+		case ddbstore.RoleRoot:
+			if p.Admin == nil || p.Admin.Role != ddbstore.RoleRoot {
+				writeErr(w, http.StatusForbidden, "root only")
+				return
+			}
+		case ddbstore.RoleAdmin:
+			if p.Admin == nil {
+				writeErr(w, http.StatusForbidden, "admin only")
+				return
+			}
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxPrincipal, p)))
 	})
+}
+
+// resolveSession 验签并核对账号：签名/形态非法、账号不存在、纪元不符、
+// 已到期 → 401；账号被禁用 → 403。
+func (s *Server) resolveSession(r *http.Request, tok string) (*ddbstore.Account, int, string) {
+	pl, ok := verifySession(s.sessionKey, tok)
+	if !ok {
+		return nil, http.StatusUnauthorized, "invalid token"
+	}
+	a, err := s.st.GetAccount(r.Context(), pl.U)
+	if errors.Is(err, ddbstore.ErrNotFound) {
+		return nil, http.StatusUnauthorized, "invalid token"
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err.Error()
+	}
+	if a.Status != ddbstore.UserActive {
+		return nil, http.StatusForbidden, "account disabled"
+	}
+	if pl.Epoch != a.PassEpoch || pl.Exp <= s.st.Now().Unix() {
+		return nil, http.StatusUnauthorized, "invalid token"
+	}
+	return a, 0, ""
 }
 
 func principalOf(r *http.Request) *principal {
@@ -166,9 +218,10 @@ func validMachineHash(s string) bool {
 	return true
 }
 
-// activate 卡激活：Bearer 卡面 + X-Machine-Hash（64 位小写 hex）。
-// revoked→403 card_revoked；active 同机→200 幂等；active 异机→409 card_bound_other；
-// inactive→CAS 绑定（status→active + MachineHash + BoundAt），写审计 bind。
+// activate 卡激活=充值券核销：Bearer 卡面 + X-Machine-Hash（64 位小写 hex）。
+// revoked→403 card_revoked；已绑异机→409 card_bound_other；
+// 其余（inactive 新卡 / 旧模型 active 卡 / redeemed 同机幂等）走 EnsureRedeemed：
+// 卡面点数转入机器账户并置 redeemed，返回机器累计余额（credits）。
 // 与 auth 中间件同规：无效卡面计入 IP 连败锁，机器码问题不计。
 func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -200,24 +253,21 @@ func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.st.ResetFail(r.Context(), "auth", ip)
 
-	switch c.Status {
-	case ddbstore.CardRevoked:
+	if c.Status == ddbstore.CardRevoked {
 		writeErr(w, http.StatusForbidden, "card_revoked")
 		return
-	case ddbstore.CardActive:
-		if c.MachineHash != machine {
-			writeErr(w, http.StatusConflict, "card_bound_other")
-			return
-		}
-		// 同机幂等
-	default: // inactive：CAS 绑定激活
-		if err := s.st.BindCard(r.Context(), c, machine); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+	}
+	if c.MachineHash != "" && c.MachineHash != machine {
+		writeErr(w, http.StatusConflict, "card_bound_other")
+		return
+	}
+	balance, err := s.st.EnsureRedeemed(r.Context(), c, machine)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"credits": c.Balance, "machine_hash": c.MachineHash, "status": c.Status,
+		"credits": balance, "machine_hash": machine, "status": ddbstore.CardRedeemed,
 	})
 }
 
@@ -296,7 +346,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) taskVisible(r *http.Request, t *ddbstore.Task) bool {
 	p := principalOf(r)
-	if p.Admin != nil && p.Admin.IsAdmin {
+	if p.Admin != nil {
 		return true
 	}
 	return p.Card != nil && t.CardID == p.Card.ID
@@ -343,7 +393,12 @@ func (s *Server) balance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "需要卡号调用")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"credits": c.Balance})
+	m, err := s.st.GetMachine(r.Context(), c.MachineHash)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credits": m.Balance})
 }
 
 // createUser 旧协议兼容：建卡即建账号，token 字段返回明文卡面（仅此一次）。
@@ -368,7 +423,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"user_id": c.ID, "name": c.Name, "token": code})
 }
 
-// grant 旧协议兼容：按卡 id 充值（只能给卡加点）。
+// grant 旧协议兼容：按卡 id 给其绑定机器充值（卡须已核销；点数记机器账户）。
 func (s *Server) grant(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		UserID int64 `json:"user_id"`
@@ -378,7 +433,7 @@ func (s *Server) grant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "user_id and positive amount required")
 		return
 	}
-	balance, err := s.st.RechargeCard(r.Context(), in.UserID, in.Amount, "")
+	c, err := s.st.GetCardByID(r.Context(), in.UserID)
 	if errors.Is(err, ddbstore.ErrCardNotFound) {
 		writeErr(w, http.StatusBadRequest, "card not found")
 		return
@@ -387,9 +442,21 @@ func (s *Server) grant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if c.Status != ddbstore.CardRedeemed || c.MachineHash == "" {
+		writeErr(w, http.StatusConflict, "card_not_redeemed")
+		return
+	}
+	balance, err := s.st.CreditMachine(r.Context(), c.MachineHash, in.Amount, "grant", "by-admin", c.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.st.AppendAudit(r.Context(), ddbstore.AuditEntry{Actor: "admin", Action: "recharge",
+		Target: c.CodeMasked, Detail: fmt.Sprintf("+%d machine=%s", in.Amount, c.MachineHash[:12]), OK: true})
 	writeJSON(w, http.StatusOK, map[string]any{"balance": balance})
 }
 
+// transactions 按卡 id 查其绑定机器的资金流水（旧协议 user_id 形参沿用卡 id）。
 func (s *Server) transactions(w http.ResponseWriter, r *http.Request) {
 	var cardID int64
 	fmt.Sscanf(r.URL.Query().Get("user_id"), "%d", &cardID)
@@ -397,7 +464,16 @@ func (s *Server) transactions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "user_id required")
 		return
 	}
-	txs, err := s.st.ListTx(r.Context(), cardID)
+	c, err := s.st.GetCardByID(r.Context(), cardID)
+	if errors.Is(err, ddbstore.ErrCardNotFound) {
+		writeErr(w, http.StatusBadRequest, "card not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	txs, err := s.st.ListMachineTx(r.Context(), c.MachineHash)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

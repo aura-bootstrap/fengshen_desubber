@@ -48,13 +48,13 @@ func (s *Server) generateCards(w http.ResponseWriter, r *http.Request) {
 		out = append(out, issued{ID: c.ID, Code: code, Name: c.Name, Batch: c.Batch, Credits: c.Balance})
 	}
 	_ = s.st.AppendAudit(r.Context(), ddbstore.AuditEntry{
-		Actor: "admin", Action: "generate",
+		Actor: principalOf(r).Admin.Username, Action: "generate",
 		Target: in.Batch, Detail: fmt.Sprintf("count=%d credits=%d", in.Count, in.Credits), OK: true,
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{"cards": out})
 }
 
-// rechargeCard 按卡面充值（只能给卡号加点数）。
+// rechargeCard 按卡面给其绑定机器充值（点数记机器账户；卡须已核销）。
 func (s *Server) rechargeCard(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Card    string `json:"card"`
@@ -73,11 +73,17 @@ func (s *Server) rechargeCard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	balance, err := s.st.RechargeCard(r.Context(), c.ID, in.Credits, "by-code")
+	if c.Status != ddbstore.CardRedeemed || c.MachineHash == "" {
+		writeErr(w, http.StatusConflict, "card_not_redeemed")
+		return
+	}
+	balance, err := s.st.CreditMachine(r.Context(), c.MachineHash, in.Credits, "grant", "by-code", c.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	_ = s.st.AppendAudit(r.Context(), ddbstore.AuditEntry{Actor: "admin", Action: "recharge",
+		Target: c.CodeMasked, Detail: fmt.Sprintf("+%d machine=%s", in.Credits, c.MachineHash[:12]), OK: true})
 	writeJSON(w, http.StatusOK, map[string]any{"balance": balance})
 }
 
@@ -91,8 +97,9 @@ func (s *Server) setCardStatus(w http.ResponseWriter, r *http.Request, status st
 		writeErr(w, http.StatusBadRequest, "card or batch required")
 		return
 	}
+	actor := principalOf(r).Admin.Username
 	if in.Batch != "" {
-		n, err := s.st.RevokeBatch(r.Context(), in.Batch, status, "admin")
+		n, err := s.st.RevokeBatch(r.Context(), in.Batch, status, actor)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -109,7 +116,7 @@ func (s *Server) setCardStatus(w http.ResponseWriter, r *http.Request, status st
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.st.SetCardStatus(r.Context(), c.Hash, status, "admin"); err != nil {
+	if err := s.st.SetCardStatus(r.Context(), c.Hash, status, actor); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -120,13 +127,14 @@ func (s *Server) revokeCard(w http.ResponseWriter, r *http.Request) {
 	s.setCardStatus(w, r, ddbstore.CardRevoked)
 }
 
-// unrevokeCard 恢复吊销：一律落 inactive（绑定已失效，须重新激活）。
+// unrevokeCard 恢复吊销：已核销卡回 redeemed（点数在机器账户），未核销卡回 inactive。
 func (s *Server) unrevokeCard(w http.ResponseWriter, r *http.Request) {
 	s.setCardStatus(w, r, ddbstore.CardInactive)
 }
 
 // unbindCard 解绑机器码：{"card_id": n} 或 {"code": "卡面"}。
-// 清 MachineHash/BoundAt、status→inactive（revoked 卡报 400），写审计 unbind。
+// 仅旧模型 active 卡可解绑（清 MachineHash/BoundAt、status→inactive）；
+// redeemed 卡点数已入机器账户、解绑不能复活卡面（409 card_redeemed），revoked 卡报 400。
 func (s *Server) unbindCard(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		CardID int64  `json:"card_id"`
@@ -151,8 +159,11 @@ func (s *Server) unbindCard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.st.UnbindCard(r.Context(), c.Hash, "admin"); errors.Is(err, ddbstore.ErrCardRevoked) {
+	if err := s.st.UnbindCard(r.Context(), c.Hash, principalOf(r).Admin.Username); errors.Is(err, ddbstore.ErrCardRevoked) {
 		writeErr(w, http.StatusBadRequest, "card revoked")
+		return
+	} else if errors.Is(err, ddbstore.ErrCardRedeemed) {
+		writeErr(w, http.StatusConflict, "card_redeemed")
 		return
 	} else if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -162,6 +173,7 @@ func (s *Server) unbindCard(w http.ResponseWriter, r *http.Request) {
 }
 
 // listCards 卡列表（hash 脱敏，不含明文卡面）。
+// 已核销卡附 machine_hash（前 16 位）与 machine_balance（机器累计余额，余额权威在机器账户）。
 func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
 	cards, err := s.st.ListCards(r.Context(), r.URL.Query().Get("batch"))
 	if err != nil {
@@ -169,17 +181,27 @@ func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type view struct {
-		ID         int64  `json:"id"`
-		Name       string `json:"name"`
-		CodeMasked string `json:"code_masked"`
-		Batch      string `json:"batch"`
-		Balance    int64  `json:"balance"`
-		Status     string `json:"status"`
-		CreatedAt  int64  `json:"created_at"`
+		ID             int64  `json:"id"`
+		Name           string `json:"name"`
+		CodeMasked     string `json:"code_masked"`
+		Batch          string `json:"batch"`
+		Balance        int64  `json:"balance"`
+		Status         string `json:"status"`
+		CreatedAt      int64  `json:"created_at"`
+		MachineHash    string `json:"machine_hash"`
+		MachineBalance int64  `json:"machine_balance"`
 	}
 	out := make([]view, 0, len(cards))
 	for _, c := range cards {
-		out = append(out, view{c.ID, c.Name, c.CodeMasked, c.Batch, c.Balance, c.Status, c.CreatedAt})
+		v := view{ID: c.ID, Name: c.Name, CodeMasked: c.CodeMasked, Batch: c.Batch,
+			Balance: c.Balance, Status: c.Status, CreatedAt: c.CreatedAt}
+		if c.MachineHash != "" {
+			v.MachineHash = c.MachineHash[:16]
+			if m, err := s.st.GetMachine(r.Context(), c.MachineHash); err == nil {
+				v.MachineBalance = m.Balance
+			}
+		}
+		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cards": out})
 }
@@ -216,7 +238,14 @@ func (s *Server) cardStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "只能查本人卡")
 		return
 	}
+	// 余额权威在机器账户：已核销卡回机器累计余额；未核销卡回卡面点数。
+	balance := c.Balance
+	if c.MachineHash != "" {
+		if m, err := s.st.GetMachine(r.Context(), c.MachineHash); err == nil {
+			balance = m.Balance
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": c.Status, "balance": c.Balance, "name": c.Name, "batch": c.Batch,
+		"status": c.Status, "balance": balance, "name": c.Name, "batch": c.Batch,
 	})
 }

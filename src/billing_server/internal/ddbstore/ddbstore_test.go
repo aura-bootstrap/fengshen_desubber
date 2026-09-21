@@ -26,42 +26,108 @@ func testStore(t *testing.T) *Store {
 	return st
 }
 
-func TestAdminAndCardLifecycle(t *testing.T) {
+func TestAccountLifecycle(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 
-	if err := st.EnsureAdmin(ctx, "adm_test_1"); err != nil {
-		t.Fatalf("EnsureAdmin: %v", err)
+	// EnsureRoot 幂等种入 + 登录校验
+	if err := st.EnsureRoot(ctx, "root-pass-123"); err != nil {
+		t.Fatalf("EnsureRoot: %v", err)
 	}
-	u, err := st.GetUserByToken(ctx, "adm_test_1")
-	if err != nil || !u.IsAdmin {
-		t.Fatalf("GetUserByToken: %v %+v", err, u)
+	if err := st.EnsureRoot(ctx, "root-pass-456"); err != nil {
+		t.Fatalf("EnsureRoot idempotent: %v", err)
 	}
+	root, ok, err := st.CheckLogin(ctx, RoleRoot, "root-pass-123")
+	if err != nil || !ok || root.Role != RoleRoot {
+		t.Fatalf("CheckLogin root: %v %v %+v", err, ok, root)
+	}
+	// 第二次 EnsureRoot 未覆盖密码
+	if _, ok, _ := st.CheckLogin(ctx, RoleRoot, "root-pass-456"); ok {
+		t.Fatal("EnsureRoot overwrote password")
+	}
+	// 错误密码/不存在账号统一 false
+	if _, ok, _ := st.CheckLogin(ctx, RoleRoot, "wrong"); ok {
+		t.Fatal("wrong password accepted")
+	}
+	if _, ok, _ := st.CheckLogin(ctx, "no-such-user", "x"); ok {
+		t.Fatal("ghost user accepted")
+	}
+
+	// 建号撞名 + 校验规则
+	hash, _ := HashPasswordNew("admin-pass-1")
+	epoch, _ := NewPassEpoch()
+	now := st.Now().Unix()
+	a := &Account{Username: "adm_t1", Role: RoleAdmin, PassHash: hash, Status: UserActive,
+		PassEpoch: epoch, Version: 1, CreatedAt: now, CreatedBy: "root", UpdatedAt: now}
+	ok, err = st.CreateAccount(ctx, a)
+	if err != nil || !ok {
+		t.Fatalf("CreateAccount: %v %v", err, ok)
+	}
+	ok, err = st.CreateAccount(ctx, a)
+	if err != nil || ok {
+		t.Fatalf("CreateAccount dup: %v %v", err, ok)
+	}
+	if msg := ValidateUsername("root"); msg == "" || ValidateUsername("ab") == "" ||
+		ValidateUsername("bad name") == "" || ValidateUsername("good_name-1.x") != "" {
+		t.Fatal("ValidateUsername rules broken")
+	}
+	if ValidatePassword("short") == "" || ValidatePassword("12345678") != "" {
+		t.Fatal("ValidatePassword rules broken")
+	}
+
+	// 改密 CAS：版本/纪元推进，旧密码失效
+	got, err := st.GetAccount(ctx, "adm_t1")
+	if err != nil {
+		t.Fatalf("GetAccount: %v", err)
+	}
+	newHash, _ := HashPasswordNew("admin-pass-2")
+	ok, err = st.CASAccount(ctx, got, func(n *Account) {
+		n.PassHash = newHash
+		n.PassEpoch++
+		n.Version++
+	})
+	if err != nil || !ok {
+		t.Fatalf("CASAccount: %v %v", err, ok)
+	}
+	if _, ok, _ := st.CheckLogin(ctx, "adm_t1", "admin-pass-1"); ok {
+		t.Fatal("old password still valid")
+	}
+	if _, ok, _ := st.CheckLogin(ctx, "adm_t1", "admin-pass-2"); !ok {
+		t.Fatal("new password rejected")
+	}
+
+	// 列表含 root 与 adm_t1，PassHash 序列化不出现在 Account JSON 之外
+	list, err := st.ListAccounts(ctx)
+	if err != nil || len(list) < 2 {
+		t.Fatalf("ListAccounts: %v len=%d", err, len(list))
+	}
+
+	// 删除后查不到
+	got, _ = st.GetAccount(ctx, "adm_t1")
+	ok, err = st.DeleteAccount(ctx, got)
+	if err != nil || !ok {
+		t.Fatalf("DeleteAccount: %v %v", err, ok)
+	}
+	if _, err := st.GetAccount(ctx, "adm_t1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("after delete: %v", err)
+	}
+}
+
+func TestCardAndMachineLifecycle(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
 
 	code, err := cardkey.Generate()
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	c, err := st.CreateCard(ctx, "alice", code, 10, "batch-t1")
+	c, err := st.CreateCard(ctx, "alice", code, 10, "batch-m1")
 	if err != nil {
 		t.Fatalf("CreateCard: %v", err)
 	}
 	// 新卡默认 inactive 且未绑定机器
-	if c.Balance != 10 || c.Status != CardInactive || c.MachineHash != "" {
+	if c.Balance != 10 || c.Status != CardInactive || c.MachineHash != "" || c.Credited {
 		t.Fatalf("card: %+v", c)
-	}
-	// inactive 卡拒扣费
-	if _, err := st.DebitCard(ctx, c, 1, "debit", "t0"); !errors.Is(err, ErrCardRevoked) {
-		t.Fatalf("inactive debit: %v", err)
-	}
-
-	// 激活绑定机器码
-	machine := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if err := st.BindCard(ctx, c, machine); err != nil {
-		t.Fatalf("BindCard: %v", err)
-	}
-	if c.Status != CardActive || c.MachineHash != machine || c.BoundAt == 0 {
-		t.Fatalf("after bind: %+v", c)
 	}
 
 	// 归一化：小写+无横线也能命中（v2 哈希）
@@ -79,67 +145,69 @@ func TestAdminAndCardLifecycle(t *testing.T) {
 		t.Fatalf("GetCardByID: %v", err)
 	}
 
-	// 充值
-	nb, err := st.RechargeCard(ctx, c.ID, 5, "")
-	if err != nil || nb != 15 {
-		t.Fatalf("RechargeCard: %v %d", err, nb)
+	// 核销：卡面 10 点转入机器账户，卡置 redeemed
+	machine := fmt.Sprintf("mach-%d", time.Now().UnixNano())
+	bal, err := st.EnsureRedeemed(ctx, c, machine)
+	if err != nil || bal != 10 {
+		t.Fatalf("EnsureRedeemed: %v %d", err, bal)
+	}
+	if c.Status != CardRedeemed || !c.Credited || c.Balance != 0 || c.MachineHash != machine || c.BoundAt == 0 {
+		t.Fatalf("after redeem: %+v", c)
+	}
+	// 幂等：再核销不多入账
+	bal, err = st.EnsureRedeemed(ctx, c, machine)
+	if err != nil || bal != 10 {
+		t.Fatalf("EnsureRedeemed idempotent: %v %d", err, bal)
 	}
 
-	// 扣费
-	got2, _ := st.GetCardByID(ctx, c.ID)
-	nb, err = st.DebitCard(ctx, got2, 15, "debit", "task-x")
+	// redeemed 卡拒解绑
+	if err := st.UnbindCard(ctx, c.Hash, "admin"); !errors.Is(err, ErrCardRedeemed) {
+		t.Fatalf("redeemed unbind: %v", err)
+	}
+
+	// 机器账户扣费/入账：超额拒扣（返回当前余额+ErrInsufficientBalance）
+	nb, err := st.DebitMachine(ctx, machine, 15, "debit", "task-x", c.ID)
+	if !errors.Is(err, ErrInsufficientBalance) || nb != 10 {
+		t.Fatalf("debit insufficient: %v %d", err, nb)
+	}
+	nb, err = st.DebitMachine(ctx, machine, 10, "debit", "task-x", c.ID)
 	if err != nil || nb != 0 {
-		t.Fatalf("DebitCard: %v %d", err, nb)
+		t.Fatalf("DebitMachine: %v %d", err, nb)
 	}
-	// 余额不足
-	got3, _ := st.GetCardByID(ctx, c.ID)
-	if _, err := st.DebitCard(ctx, got3, 1, "debit", "task-y"); !errors.Is(err, ErrInsufficientBalance) {
-		t.Fatalf("debit should be insufficient: %v", err)
+	nb, err = st.CreditMachine(ctx, machine, 5, "grant", "by-admin", c.ID)
+	if err != nil || nb != 5 {
+		t.Fatalf("CreditMachine: %v %d", err, nb)
 	}
 
-	// 吊销后拒扣
+	// 吊销：业务读取态由服务端判；恢复已核销卡回 redeemed
 	if err := st.SetCardStatus(ctx, c.Hash, CardRevoked, "admin"); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	got4, _ := st.GetCardByID(ctx, c.ID)
-	if _, err := st.DebitCard(ctx, got4, 0, "debit", "t"); !errors.Is(err, ErrCardRevoked) {
-		t.Fatalf("revoked debit: %v", err)
-	}
-	// 吊销卡拒解绑
 	if err := st.UnbindCard(ctx, c.Hash, "admin"); !errors.Is(err, ErrCardRevoked) {
 		t.Fatalf("revoked unbind: %v", err)
 	}
-	// 恢复落 inactive 且机器绑定已清
 	if err := st.SetCardStatus(ctx, c.Hash, CardInactive, "admin"); err != nil {
 		t.Fatalf("unrevoke: %v", err)
 	}
-	got5, _ := st.GetCardByID(ctx, c.ID)
-	if got5.Status != CardInactive || got5.MachineHash != "" || got5.BoundAt != 0 {
-		t.Fatalf("after unrevoke: %+v", got5)
-	}
-	// 重新绑定后可再解绑（幂等回 inactive）
-	if err := st.BindCard(ctx, got5, machine); err != nil {
-		t.Fatalf("re-bind: %v", err)
-	}
-	if err := st.UnbindCard(ctx, c.Hash, "admin"); err != nil {
-		t.Fatalf("UnbindCard: %v", err)
-	}
-	got6, _ := st.GetCardByID(ctx, c.ID)
-	if got6.Status != CardInactive || got6.MachineHash != "" {
-		t.Fatalf("after unbind: %+v", got6)
+	got2, _ := st.GetCardByID(ctx, c.ID)
+	if got2.Status != CardRedeemed || got2.MachineHash != machine {
+		t.Fatalf("after unrevoke credited card: %+v", got2)
 	}
 
-	// 流水：recharge + debit 各一条
-	txs, err := st.ListTx(ctx, c.ID)
-	if err != nil || len(txs) != 2 {
-		t.Fatalf("ListTx: %v len=%d", err, len(txs))
+	// 机器流水：redeem grant + debit + admin grant = 3 条
+	txs, err := st.ListMachineTx(ctx, machine)
+	if err != nil || len(txs) != 3 {
+		t.Fatalf("ListMachineTx: %v len=%d", err, len(txs))
 	}
-	if txs[0].Kind != "grant" || txs[1].Kind != "debit" {
-		t.Fatalf("tx order: %+v", txs)
+	if txs[0].Kind != "grant" || txs[1].Kind != "debit" || txs[2].Kind != "grant" {
+		t.Fatalf("tx kinds: %+v", txs)
+	}
+	if txs[2].BalanceAfter != 5 {
+		t.Fatalf("tx balance: %+v", txs[2])
 	}
 
 	// 批次索引
-	cards, err := st.ListCards(ctx, "batch-t1")
+	cards, err := st.ListCards(ctx, "batch-m1")
 	if err != nil || len(cards) == 0 {
 		t.Fatalf("ListCards batch: %v len=%d", err, len(cards))
 	}
@@ -159,13 +227,9 @@ func TestAdminAndCardLifecycle(t *testing.T) {
 func TestConcurrentDebitConsistency(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
-	code, _ := cardkey.Generate()
-	c, err := st.CreateCard(ctx, "conc", code, 100, "")
-	if err != nil {
-		t.Fatalf("CreateCard: %v", err)
-	}
-	if err := st.BindCard(ctx, c, "machine-conc"); err != nil {
-		t.Fatalf("BindCard: %v", err)
+	machine := fmt.Sprintf("mach-conc-%d", time.Now().UnixNano())
+	if _, err := st.CreditMachine(ctx, machine, 100, "grant", "seed", 0); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
 	const n = 10
 	var wg sync.WaitGroup
@@ -176,15 +240,11 @@ func TestConcurrentDebitConsistency(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			for {
-				cur, err := st.GetCardByID(ctx, c.ID)
-				if err != nil {
-					return
-				}
-				_, err = st.DebitCard(ctx, cur, 7, "debit", fmt.Sprintf("t-%d", i))
+				_, err := st.DebitMachine(ctx, machine, 7, "debit", fmt.Sprintf("t-%d", i), 0)
 				if errors.Is(err, ErrInsufficientBalance) {
 					// 并发冲突按不足返回：重读重试整流程
-					cur2, _ := st.GetCardByID(ctx, c.ID)
-					if cur2.Balance >= 7 {
+					m, _ := st.GetMachine(ctx, machine)
+					if m.Balance >= 7 {
 						continue
 					}
 					return
@@ -199,7 +259,7 @@ func TestConcurrentDebitConsistency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	final, err := st.GetCardByID(ctx, c.ID)
+	final, err := st.GetMachine(ctx, machine)
 	if err != nil {
 		t.Fatalf("final: %v", err)
 	}
@@ -219,17 +279,21 @@ func TestTaskQueueFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCard: %v", err)
 	}
-	if err := st.BindCard(ctx, c, "machine-worker"); err != nil {
-		t.Fatalf("BindCard: %v", err)
+	machine := fmt.Sprintf("mach-task-%d", time.Now().UnixNano())
+	if _, err := st.EnsureRedeemed(ctx, c, machine); err != nil {
+		t.Fatalf("EnsureRedeemed: %v", err)
 	}
 
 	t1 := &Task{ID: "task-" + code[:8] + "-1", CardID: c.ID, Provider: "las", SrcPath: "/tmp/a.mp4", DurationSec: 50, Cost: 1}
 	if _, err := st.CreateTaskWithDebit(ctx, t1); err != nil {
 		t.Fatalf("CreateTaskWithDebit: %v", err)
 	}
-	nb, _ := st.GetCardByID(ctx, c.ID)
-	if nb.Balance != 9 {
-		t.Fatalf("balance after debit: %d", nb.Balance)
+	m, _ := st.GetMachine(ctx, machine)
+	if m.Balance != 9 {
+		t.Fatalf("balance after debit: %d", m.Balance)
+	}
+	if t1.MachineHash != machine {
+		t.Fatalf("task machine: %+v", t1)
 	}
 
 	got, err := st.NextQueued(ctx)
@@ -275,9 +339,9 @@ func TestTaskQueueFlow(t *testing.T) {
 	if err := st.FailTaskWithRefund(ctx, t2.ID, "boom"); err != nil {
 		t.Fatalf("FailTaskWithRefund idempotent: %v", err)
 	}
-	nb, _ = st.GetCardByID(ctx, c.ID)
-	if nb.Balance != 9 { // 10 -1 -2 +2
-		t.Fatalf("balance after refund: %d", nb.Balance)
+	m, _ = st.GetMachine(ctx, machine)
+	if m.Balance != 9 { // 10 -1 -2 +2
+		t.Fatalf("balance after refund: %d", m.Balance)
 	}
 	ft, _ := st.GetTask(ctx, t2.ID)
 	if ft.Status != TaskFailed || ft.Error != "boom" {

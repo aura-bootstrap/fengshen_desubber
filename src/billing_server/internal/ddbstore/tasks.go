@@ -18,10 +18,12 @@ const (
 
 // Task 去字幕任务（落库 JSON 字段序固定=SETCAS 基线前提）。
 // Provider 为处理平台名（provider.Registry 注册名），空 = 默认平台。
+// CardID 为提交任务所用凭证卡（归因/可见性）；费用走 MachineHash 机器账户。
 type Task struct {
 	ID          string `json:"id"`
 	CardID      int64  `json:"card_id"`
 	CardHash    string `json:"card_hash"`
+	MachineHash string `json:"machine_hash"`
 	Provider    string `json:"provider"`
 	SrcPath     string `json:"src_path"`
 	ResultPath  string `json:"result_path,omitempty"`
@@ -118,14 +120,15 @@ func removeID(ids []string, id string) []string {
 	return out
 }
 
-// CreateTaskWithDebit 提交点=卡余额 CAS 扣费；随后落任务键 + 入队。
+// CreateTaskWithDebit 提交点=机器余额 CAS 扣费；随后落任务键 + 入队。
 // 入队失败则退款并置失败，避免任务搁浅吞掉预扣。
 func (s *Store) CreateTaskWithDebit(ctx context.Context, t *Task) (balanceAfter int64, err error) {
 	c, err := s.GetCardByID(ctx, t.CardID)
 	if err != nil {
 		return 0, err
 	}
-	balanceAfter, err = s.DebitCard(ctx, c, t.Cost, "debit", t.ID)
+	t.MachineHash = c.MachineHash
+	balanceAfter, err = s.DebitMachine(ctx, t.MachineHash, t.Cost, "debit", t.ID, c.ID)
 	if err != nil {
 		return balanceAfter, err
 	}
@@ -169,8 +172,17 @@ func (s *Store) FailTaskWithRefund(ctx context.Context, taskID, errMsg string) e
 	if !ok {
 		return errors.New("fail task: cas conflict")
 	}
-	if _, err := s.RefundCard(ctx, t.CardID, t.Cost, t.ID); err != nil {
-		log.Printf("task %s refund failed: %v", t.ID, err)
+	machine := t.MachineHash
+	if machine == "" {
+		// 旧模型任务（无机器字段）：经卡解析机器
+		if c, cerr := s.GetCardByID(ctx, t.CardID); cerr == nil {
+			machine = c.MachineHash
+		}
+	}
+	if machine != "" {
+		if _, err := s.CreditMachine(ctx, machine, t.Cost, "refund", t.ID, t.CardID); err != nil {
+			log.Printf("task %s refund failed: %v", t.ID, err)
+		}
 	}
 	if err := s.mutateIDList(ctx, keyQueue, func(ids []string) []string { return removeID(ids, t.ID) }); err != nil {
 		log.Printf("task %s dequeue failed: %v", t.ID, err)
