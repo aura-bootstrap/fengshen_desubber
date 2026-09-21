@@ -62,7 +62,10 @@ class LicenseCard extends StatelessWidget {
           ),
         ] else ...[
           if (activated && ck != null) ...[
-            Text('剩余点数', style: TextStyle(fontSize: 11, color: t.dim)),
+            // 「剩余点数」仿 slicer 商业授权标题式样:12px 粗体 ink。
+            Text('剩余点数',
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w700, color: t.ink)),
             Text('${ck.credits} 点',
                 style: TextStyle(
                     fontSize: 20,
