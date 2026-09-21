@@ -85,6 +85,8 @@ class _TaskDetailPageState extends State<TaskDetailPage> {
                 : ListView(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
                     children: [
+                      OverallProgress(task: tk),
+                      const SizedBox(height: 16),
                       StageTimeline(task: tk),
                       const SizedBox(height: 16),
                       if (tk.reportJson.isNotEmpty) ReportCard(reportJson: tk.reportJson),
@@ -96,6 +98,56 @@ class _TaskDetailPageState extends State<TaskDetailPage> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 总进度条:跨阶段overall进度(模型 progress 已按阶段位置+阶段内计数加权),
+/// 运行中实时推进;排队/失败等非运行态冻结显示对应文案。
+class OverallProgress extends StatelessWidget {
+  final DesubTask task;
+  const OverallProgress({super.key, required this.task});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final pct = (task.progress * 100).round();
+    final running = task.status == 'running';
+    final label = switch (task.status) {
+      'running' => '总进度 $pct%',
+      'queued' => '排队中',
+      'succeeded' => '已完成',
+      'failed' => '失败',
+      'stopped' => '已停止',
+      _ => '等待中',
+    };
+    final labelColor = switch (task.status) {
+      'failed' => t.danger,
+      'succeeded' => t.success,
+      _ => t.primaryInk,
+    };
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Row(children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: task.progress,
+                minHeight: 8,
+                backgroundColor: t.primarySoft,
+                valueColor: AlwaysStoppedAnimation(
+                    running || task.status == 'succeeded' ? t.primary : t.faint),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12, color: labelColor, fontWeight: FontWeight.w600)),
+        ]),
       ),
     );
   }
