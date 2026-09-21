@@ -88,7 +88,7 @@ class LicenseCard extends StatelessWidget {
           const SizedBox(height: 9),
           InkWell(
             onTap: () => _activate(context),
-            child: Text(activated ? '更换卡密 ›' : '立即激活 ›',
+            child: Text(activated ? '账户充值 ›' : '立即激活 ›',
                 style: TextStyle(
                     fontSize: 10.5,
                     color: t.primaryInk,
