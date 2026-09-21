@@ -84,6 +84,10 @@ func (s *server) runLocal(ctx context.Context, tk *store.Task, events chan<- Eve
 			return fmt.Errorf("任务参数快照损坏: %v", err)
 		}
 	}
+	if cfg.Online.Enabled {
+		// 在线分支:不拉本地 desub.exe,上传原片给计费服务云端处理(见 online.go)。
+		return runOnline(ctx, s.exeDir, tk.WorkDir, tk.SrcPath, tk.OutName, events)
+	}
 	bin := filepath.Join(s.exeDir, "desub.exe")
 	if _, err := os.Stat(bin); err != nil {
 		return fmt.Errorf("找不到引擎 CLI: %s", bin)

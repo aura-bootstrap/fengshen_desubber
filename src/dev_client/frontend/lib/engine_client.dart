@@ -146,6 +146,21 @@ class EngineClient {
     }
   }
 
+  // ---- 卡密(在线去字幕) ----
+
+  /// 卡密状态;远端不可达时引擎回本地缓存(stale=true)。
+  Future<CardKeyStatus> cardkeyStatus() async =>
+      CardKeyStatus.fromJson(decodeJsonObject(await _get('/api/cardkey/status')));
+
+  /// 激活卡密;server 空串时引擎回落全局配置 online.server。
+  Future<void> cardkeyActivate(String cardKey, {String server = ''}) async =>
+      _postJson('/api/cardkey/activate',
+          {'card_key': cardKey, if (server.isNotEmpty) 'server': server});
+
+  /// 解绑:只删本地 keyfile,不解远端绑定。
+  Future<void> cardkeyDeactivate() async =>
+      _postJson('/api/cardkey/deactivate');
+
   Future<String> _get(String path) async {
     final resp = await _http.get(_u(path));
     if (resp.statusCode != 200) {

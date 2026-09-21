@@ -12,15 +12,19 @@ Object? getPath(Map<String, dynamic> cfg, String path) {
   return node;
 }
 
-/// 开发版三引擎选择(创建/重跑任务三选一;映射到配置键,随任务快照固化)。
+/// 开发版引擎选择(创建/重跑任务选一个;映射到配置键,随任务快照固化)。
+/// 在线引擎走计费服务云端管线,需先在弹窗内激活卡密。
 const devEngineOptions = <String, String>{
   'temporal': '时域迁移 temporal(邻帧真实像素,快)',
   'delogo': '空间修补 delogo(单帧内修补)',
   'propainter': 'ProPainter 生成式(复杂遮挡,需 GPU)',
+  'online': '在线去字幕 online(云端·按分钟扣点)',
 };
 
-/// 从配置快照反推三引擎选择(propainter 强制路由 > delogo > 默认 temporal)。
+/// 从配置快照反推引擎选择(在线 > propainter 强制路由 > delogo > 默认 temporal)。
 String engineOfConfig(Map<String, dynamic> cfg) {
+  final online = cfg['online'];
+  if (online is Map && online['enabled'] == true) return 'online';
   final repair = cfg['repair'];
   final engine = repair is Map ? repair['engine'] : null;
   final force = repair is Map ? repair['force_engine'] : null;
@@ -29,14 +33,20 @@ String engineOfConfig(Map<String, dynamic> cfg) {
   return 'temporal';
 }
 
-/// 深拷贝配置并按三引擎选择覆盖 repair/enhance 键(propainter 走时域管线+强制路由)。
+/// 深拷贝配置并按引擎选择覆盖 repair/enhance/online 键(propainter 走时域管线+强制路由;
+/// online 只置 online.enabled,保留 online.server 等其余键)。
 Map<String, dynamic> configWithEngine(Map<String, dynamic> cfg, String engine) {
   final next = (jsonDecode(jsonEncode(cfg)) as Map).cast<String, dynamic>();
   final repair =
       (next['repair'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
   final enhance =
       (next['enhance'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+  final online =
+      (next['online'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+  online['enabled'] = engine == 'online';
   switch (engine) {
+    case 'online':
+      break; // 本地三键不动,运行时整段走云端管线
     case 'delogo':
       repair['engine'] = 'delogo';
       repair['force_engine'] = '';
@@ -50,6 +60,7 @@ Map<String, dynamic> configWithEngine(Map<String, dynamic> cfg, String engine) {
   }
   next['repair'] = repair;
   next['enhance'] = enhance;
+  next['online'] = online;
   return next;
 }
 
@@ -259,6 +270,14 @@ final configPages = <ConfigPage>[
           hint: '真实像素覆盖率低于此值的事件标记为高风险'),
     ]),
   ]),
+  ConfigPage('online', '在线', '云端去字幕(按分钟扣点;需计费服务地址与卡密)', [
+    FieldGroup('云端管线', '在线去字幕开关与计费服务地址', [
+      FieldDef('online.enabled', '在线去字幕', FieldKind.bool,
+          hint: '新建任务默认走云端管线;创建/重跑时的引擎选择优先于此值'),
+      FieldDef('online.server', '计费服务地址', FieldKind.text,
+          hint: '形如 http://127.0.0.1:18099;激活卡密时缺省取此值'),
+    ]),
+  ]),
 ];
 
 /// 版本管理页只展示配置参数的白名单:配置页字段顶层键。
@@ -275,6 +294,40 @@ class TaskWindow {
   const TaskWindow(this.tasks, this.total);
 }
 
+/// 卡密状态(GET /api/cardkey/status);degraded/stale 时余额为本地缓存值。
+class CardKeyStatus {
+  final bool activated;
+  final String server;
+  final String masked; // 脱敏卡号,形如 ABCDE…Z
+  final int credits; // 剩余点数
+  final String machineHash;
+  final bool degraded; // 引擎侧降级(机器码采集失败等)
+  final bool stale; // 远端不可达,状态为本地缓存
+  final String error; // 授权类错误文案(吊销/机器码不一致等)
+
+  const CardKeyStatus({
+    required this.activated,
+    required this.server,
+    required this.masked,
+    required this.credits,
+    required this.machineHash,
+    required this.degraded,
+    required this.stale,
+    required this.error,
+  });
+
+  factory CardKeyStatus.fromJson(Map<String, dynamic> j) => CardKeyStatus(
+        activated: j['activated'] as bool? ?? false,
+        server: j['server'] as String? ?? '',
+        masked: j['masked'] as String? ?? '',
+        credits: (j['credits'] as num? ?? 0).toInt(),
+        machineHash: j['machine_hash'] as String? ?? '',
+        degraded: j['degraded'] as bool? ?? false,
+        stale: j['stale'] as bool? ?? false,
+        error: j['error'] as String? ?? '',
+      );
+}
+
 /// 任务(视频 + 参数快照 + 运行状态;对应引擎 tasks 表一行)。
 class TaskInfo {
   final int id;
@@ -283,7 +336,7 @@ class TaskInfo {
   final String outName;
   final String paramsJson;
   final String status; // pending|queued|running|succeeded|failed|stopped
-  final String stage; // probe|cuts|detect|ocr|engine|repair|verify
+  final String stage; // probe|cuts|detect|ocr|engine|repair|verify|upload|cloud|download
   final int done, total;
   final String workDir;
   final String reportJson;
@@ -332,6 +385,9 @@ class TaskInfo {
         'engine' => '引擎路由',
         'repair' => '修补',
         'verify' => '复检',
+        'upload' => '上传',
+        'cloud' => '云端处理',
+        'download' => '下载',
         _ => stage,
       };
 

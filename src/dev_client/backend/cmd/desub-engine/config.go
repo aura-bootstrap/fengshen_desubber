@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/aura-bootstrap/fengshen_desubber/internal/store"
 )
@@ -59,12 +60,20 @@ type OutputConfig struct {
 	RiskCoverage float64 `json:"risk_coverage"` // high-risk coverage threshold
 }
 
+// OnlineConfig 云端去字幕:enabled 由创建/重跑的引擎选择写入任务快照(替代本地管线);
+// server 为计费服务地址(激活请求缺省取此值,激活后随 cardkey.json 固化)。
+type OnlineConfig struct {
+	Enabled bool   `json:"enabled"`
+	Server  string `json:"server"`
+}
+
 type Config struct {
 	Detect  DetectConfig  `json:"detect"`
 	Repair  RepairConfig  `json:"repair"`
 	Enhance EnhanceConfig `json:"enhance"`
 	Encode  EncodeConfig  `json:"encode"`
 	Output  OutputConfig  `json:"output"`
+	Online  OnlineConfig  `json:"online"`
 }
 
 func defaultConfig() *Config {
@@ -167,6 +176,10 @@ func (c *Config) validate() []fieldErr {
 	}
 	if c.Output.RiskCoverage < 0 || c.Output.RiskCoverage > 1 {
 		bad("output.risk_coverage", "须在 [0, 1] 区间")
+	}
+	if s := strings.TrimSpace(c.Online.Server); s != "" &&
+		!strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		bad("online.server", "须为 http(s):// 地址或留空")
 	}
 	return errs
 }

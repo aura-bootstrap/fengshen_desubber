@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../models.dart';
 import '../responsive.dart';
 import '../theme.dart';
+import '../widgets/cardkey_activate_dialog.dart';
 import '../widgets/param_field.dart';
 import '../widgets/top_toast.dart';
 
@@ -337,9 +338,17 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
             onChanged: _busy
                 ? (_) {}
                 : (v) {
-                    if (v != null) setState(() => _engine = v);
+                    if (v == null) return;
+                    setState(() => _engine = v);
+                    // 切到在线引擎时顺带拉一次卡密状态。
+                    if (v == 'online') widget.state.refreshCardKey();
                   },
           ),
+          // 仅在线引擎展示卡密状态区(激活/余额/换卡/解绑)。
+          if (_engine == 'online') ...[
+            const SizedBox(height: 10),
+            _cardKeySection(t),
+          ],
           const SizedBox(height: 10),
           TextField(
             controller: _name,
@@ -367,12 +376,146 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
             onPressed: _busy ? null : () => Navigator.pop(context),
             child: const Text('取消')),
         OutlinedButton(
-            onPressed: _busy ? null : () => _submit(false),
+            // 在线引擎未激活或余额为 0 时禁用创建(卡密区有对应提示)。
+            onPressed: (_busy || _onlineBlocked) ? null : () => _submit(false),
             child: const Text('创建')),
         FilledButton(
-            onPressed: _busy ? null : () => _submit(true),
+            onPressed: (_busy || _onlineBlocked) ? null : () => _submit(true),
             child: const Text('创建并运行')),
       ],
     );
+  }
+
+  /// 在线引擎下是否禁止创建:状态未取到/未激活/余额为 0。
+  bool get _onlineBlocked {
+    if (_engine != 'online') return false;
+    final ck = widget.state.cardKey;
+    return ck == null || !ck.activated || ck.credits <= 0;
+  }
+
+  /// 卡密状态区(仅在线引擎展示),跟随 AppState 通知刷新。
+  Widget _cardKeySection(AppTokens t) {
+    return AnimatedBuilder(
+      animation: widget.state,
+      builder: (context, _) {
+        final st = widget.state;
+        Widget child;
+        if (st.cardKeyLoading && st.cardKey == null) {
+          child = Row(children: [
+            const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+            const SizedBox(width: 8),
+            Text('正在查询卡密状态…',
+                style: TextStyle(fontSize: 12.5, color: t.dim)),
+          ]);
+        } else if (st.cardKey == null) {
+          // 状态查询失败(引擎未就绪):给重试入口。
+          child = Row(children: [
+            Icon(Icons.error_outline, size: 15, color: t.danger),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('无法获取卡密状态:${st.cardKeyError ?? '未知错误'}',
+                  style: TextStyle(fontSize: 12.5, color: t.danger),
+                  overflow: TextOverflow.ellipsis),
+            ),
+            TextButton(
+                onPressed: st.refreshCardKey, child: const Text('重试')),
+          ]);
+        } else if (!st.cardKey!.activated) {
+          child = Row(children: [
+            Icon(Icons.key_off, size: 15, color: t.warn),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('未激活卡密(在线去字幕按分钟扣点)',
+                  style: TextStyle(fontSize: 12.5, color: t.dim),
+                  overflow: TextOverflow.ellipsis),
+            ),
+            FilledButton.icon(
+              onPressed: _activateCard,
+              icon: const Icon(Icons.key, size: 15),
+              label: const Text('激活'),
+            ),
+          ]);
+        } else {
+          final ck = st.cardKey!;
+          child = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.key, size: 15, color: t.success),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '卡 ${ck.masked} · 余额 ${ck.credits} 点 · ${ck.server}'
+                    '${ck.degraded || ck.stale ? '(状态为缓存,以服务端为准)' : ''}',
+                    style: TextStyle(fontSize: 12.5, color: t.ink),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton(onPressed: _activateCard, child: const Text('换卡')),
+                TextButton(
+                  onPressed: _confirmDeactivate,
+                  child: Text('解绑', style: TextStyle(color: t.danger)),
+                ),
+              ]),
+              if (ck.error.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(ck.error,
+                      style: TextStyle(fontSize: 12.5, color: t.danger)),
+                ),
+              if (ck.credits <= 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text('余额不足,请充值后再创建在线任务',
+                      style: TextStyle(fontSize: 12.5, color: t.danger)),
+                ),
+            ],
+          );
+        }
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: t.primarySoft.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: t.border),
+          ),
+          child: child,
+        );
+      },
+    );
+  }
+
+  /// 弹激活对话框(激活/换卡共用),成功后状态由 AppState 通知刷新。
+  Future<void> _activateCard() async {
+    await showCardKeyActivateDialog(context, widget.state);
+  }
+
+  /// 解绑卡密,二次确认。
+  Future<void> _confirmDeactivate() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('解绑卡密'),
+        content: const Text('解绑后本机将不能再使用在线去字幕(远端绑定不解除,同卡可直接重新激活),确定解绑吗?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('解绑')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await widget.state.deactivateCardKey();
+    } catch (e) {
+      if (mounted) TopToast.show(context, '$e', error: true);
+    }
   }
 }

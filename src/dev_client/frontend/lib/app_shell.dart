@@ -23,19 +23,20 @@ const navWorkspace = [
   NavItem('run', '运行', Icons.play_circle_outline),
 ];
 
-/// 配置:五域参数页 + 文本配置 + 版本管理。
+/// 配置:五域参数页 + 在线(云端去字幕) + 文本配置 + 版本管理。
 const navConfig = [
   NavItem('detect', '检测', Icons.subtitles_outlined),
   NavItem('repair', '修复', Icons.healing_outlined),
   NavItem('enhance', '增强', Icons.auto_awesome_outlined),
   NavItem('encode', '编码', Icons.memory),
   NavItem('output', '产出', Icons.straighten),
+  NavItem('online', '在线', Icons.cloud_outlined),
   NavItem('json', '文本配置', Icons.code),
   NavItem('versions', '版本管理', Icons.history),
 ];
 
 /// 主框架:自定义标题栏 + 左侧导航 + 内容区 + 底部状态栏。
-/// 开发版:无授权卡片/激活徽标,全部参数面板可调,不连服务器。
+/// 开发版:无授权卡片/激活徽标,全部参数面板可调;在线引擎时才连计费服务。
 class AppShell extends StatelessWidget {
   final AppState state;
   final String currentNav;

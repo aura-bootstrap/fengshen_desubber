@@ -161,6 +161,9 @@ class _RunHeader extends StatelessWidget {
       'engine' => '引擎路由',
       'repair' => '修补',
       'verify' => '复检',
+      'upload' => '上传',
+      'cloud' => '云端处理',
+      'download' => '下载',
       _ => stage,
     };
     return Card(

@@ -202,6 +202,40 @@ class AppState extends ChangeNotifier {
   /// 任务详情刷新(运行页报告区)。
   Future<TaskInfo> taskDetail(int id) => client.taskDetail(id);
 
+  // ---- 卡密(在线去字幕) ----
+
+  CardKeyStatus? cardKey;
+  bool cardKeyLoading = false;
+  String? cardKeyError;
+
+  /// 刷新卡密状态(进新建任务对话框选在线引擎时调用)。
+  Future<void> refreshCardKey() async {
+    cardKeyLoading = true;
+    cardKeyError = null;
+    notifyListeners();
+    try {
+      cardKey = await client.cardkeyStatus();
+    } catch (e) {
+      cardKey = null;
+      cardKeyError = e is ApiException ? e.message : '$e';
+    }
+    cardKeyLoading = false;
+    notifyListeners();
+  }
+
+  /// 激活卡密;server 空串时引擎回落全局配置 online.server。成功后刷新状态。
+  Future<void> activateCardKey(String cardKey, {String server = ''}) async {
+    await client.cardkeyActivate(cardKey, server: server);
+    await refreshCardKey();
+  }
+
+  /// 解绑卡密(只删本地 keyfile,不解远端绑定)。
+  Future<void> deactivateCardKey() async {
+    await client.cardkeyDeactivate();
+    cardKey = null;
+    await refreshCardKey();
+  }
+
   // ---- 配置编辑(防抖 1s 自动落盘) ----
 
   /// 表单控件改动:单键写回 + 防抖 1s 自动保存。

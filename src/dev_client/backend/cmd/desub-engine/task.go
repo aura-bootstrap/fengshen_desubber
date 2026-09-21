@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aura-bootstrap/fengshen_desubber/internal/cardkey"
 	"github.com/aura-bootstrap/fengshen_desubber/internal/store"
 )
 
@@ -64,6 +65,15 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		pb, _ := json.Marshal(cfg)
 		params = string(pb)
+	}
+
+	// 在线去字幕前置校验:未激活卡密直接在创建期 400,不入库(尽早失败)。
+	var probe Config
+	if err := json.Unmarshal([]byte(params), &probe); err == nil && probe.Online.Enabled {
+		if _, err := cardkey.LoadKeyFile(s.exeDir); err != nil {
+			writeErr(w, http.StatusBadRequest, "在线去字幕需要先激活卡密(新建任务选在线引擎后激活)")
+			return
+		}
 	}
 
 	tk := &store.Task{
