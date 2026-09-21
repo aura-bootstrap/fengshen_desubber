@@ -125,18 +125,19 @@ class AppState extends ChangeNotifier {
     onOpenTask?.call(id);
   }
 
-  /// 创建任务(快照当前配置);runNow=true 时创建即运行(忙则入队)并选中。
+  /// 创建任务(快照当前配置;engine 非空时按三引擎选择覆盖快照);runNow=true 时创建即运行(忙则入队)并选中。
   Future<TaskInfo> createTask({
     String name = '',
     required String srcPath,
     String outName = '',
+    String? engine,
     bool runNow = false,
   }) async {
     final tk = await client.createTask(
       name: name,
       srcPath: srcPath,
       outName: outName,
-      params: config,
+      params: engine == null ? config : configWithEngine(config, engine),
       runNow: runNow,
     );
     await refreshTasks();
@@ -152,9 +153,27 @@ class AppState extends ChangeNotifier {
   }
 
   /// 运行(重跑)任务;引擎忙时由引擎入队,一轮结束自动调度。
+  /// engine 非空时先按三引擎选择覆盖任务参数快照再运行。
   /// 返回 'started' | 'queued'。
-  Future<String> runTask(int id) async {
-    final status = await client.runTask(id);
+  Future<String> runTask(int id, {String? engine}) async {
+    Map<String, dynamic>? params;
+    if (engine != null) {
+      TaskInfo? tk;
+      for (final t in taskList) {
+        if (t.id == id) {
+          tk = t;
+          break;
+        }
+      }
+      tk ??= await client.taskDetail(id);
+      Map<String, dynamic> base = {};
+      try {
+        final v = jsonDecode(tk.paramsJson);
+        if (v is Map) base = v.cast<String, dynamic>();
+      } catch (_) {}
+      params = configWithEngine(base.isEmpty ? config : base, engine);
+    }
+    final status = await client.runTask(id, params: params);
     await refreshTasks();
     if (status == 'started') {
       selectedTaskId = id;

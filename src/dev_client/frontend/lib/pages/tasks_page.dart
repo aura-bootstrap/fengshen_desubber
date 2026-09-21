@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../models.dart';
 import '../responsive.dart';
 import '../theme.dart';
+import '../widgets/param_field.dart';
 import '../widgets/top_toast.dart';
 
 /// 任务页:任务卡片列表 + 新建任务向导(选视频 → 命名 → 创建/立即运行)。
@@ -240,8 +241,15 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   final _name = TextEditingController();
   final _outName = TextEditingController();
   String _srcPath = '';
+  String _engine = 'temporal';
   String? _error;
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _engine = engineOfConfig(widget.state.config);
+  }
 
   @override
   void dispose() {
@@ -277,6 +285,7 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
         name: _name.text.trim(),
         srcPath: _srcPath,
         outName: _outName.text.trim(),
+        engine: _engine,
         runNow: runNow,
       );
       if (mounted) {
@@ -320,6 +329,18 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
             ),
           ]),
           const SizedBox(height: 14),
+          StyledDropdown(
+            value: _engine,
+            options: devEngineOptions.keys.toList(),
+            labelOf: (v) => devEngineOptions[v] ?? v,
+            decoration: const InputDecoration(labelText: '修复引擎'),
+            onChanged: _busy
+                ? (_) {}
+                : (v) {
+                    if (v != null) setState(() => _engine = v);
+                  },
+          ),
+          const SizedBox(height: 10),
           TextField(
             controller: _name,
             decoration: const InputDecoration(

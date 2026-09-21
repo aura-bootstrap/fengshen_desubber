@@ -131,6 +131,12 @@ func (t *TaskDB) UpdateWorkDir(id int64, dir string) error {
 	return err
 }
 
+// UpdateParams 覆盖任务的参数快照(重跑前换引擎等场景)。
+func (t *TaskDB) UpdateParams(id int64, params string) error {
+	_, err := t.db.Exec(`UPDATE tasks SET params_json=?, updated_at=? WHERE id=?`, params, now(), id)
+	return err
+}
+
 func (t *TaskDB) SetStatus(id int64, status string) error {
 	_, err := t.db.Exec(`UPDATE tasks SET status=?, updated_at=? WHERE id=?`, status, now(), id)
 	return err

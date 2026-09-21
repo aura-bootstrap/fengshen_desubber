@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -106,6 +107,7 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTaskRun POST /api/tasks/{id}/run — 引擎忙时入队而非报错。
+// 请求体可带 {"params": {...}}:重跑前覆盖任务参数快照(换引擎),空体沿用旧快照。
 func (s *server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
 	if !s.taskMode {
 		writeErr(w, http.StatusServiceUnavailable, "任务功能不可用")
@@ -116,6 +118,27 @@ func (s *server) handleTaskRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "任务不存在")
 		return
+	}
+	var req struct {
+		Params json.RawMessage `json:"params"`
+	}
+	if r.Body != nil {
+		// 空体(旧客户端)不视为错误;仅解析失败才拒绝
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "请求解析失败")
+			return
+		}
+	}
+	if params := strings.TrimSpace(string(req.Params)); params != "" {
+		if !json.Valid(req.Params) {
+			writeErr(w, http.StatusUnprocessableEntity, "params 不是合法 JSON")
+			return
+		}
+		if err := s.taskDB.UpdateParams(tk.ID, params); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		tk.ParamsJSON = params
 	}
 	s.mu.Lock()
 	_, runningThis := s.runs[id]

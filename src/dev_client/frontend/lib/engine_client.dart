@@ -129,8 +129,10 @@ class EngineClient {
   }
 
   /// 运行任务;引擎空闲→'started';忙→入队 'queued'(一轮结束自动调度)。
-  Future<String> runTask(int id) async {
-    final j = await _postJson('/api/tasks/$id/run');
+  /// params 非空时先覆盖任务参数快照(重跑换引擎)再运行。
+  Future<String> runTask(int id, {Map<String, dynamic>? params}) async {
+    final j = await _postJson(
+        '/api/tasks/$id/run', params == null ? null : {'params': params});
     return j['status'] as String? ?? 'started';
   }
 

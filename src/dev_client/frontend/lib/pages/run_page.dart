@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../models.dart';
 import '../responsive.dart';
 import '../theme.dart';
+import '../widgets/param_field.dart';
 import '../widgets/top_toast.dart';
 
 /// 运行页:选中任务的实时进度 + 引擎日志 + 完成后的报告/产物入口。
@@ -47,20 +48,7 @@ class RunPage extends StatelessWidget {
                 label: const Text('停止'),
               )
             else if (tk != null)
-              FilledButton.icon(
-                onPressed: () async {
-                  try {
-                    final status = await state.runTask(tk.id);
-                    if (context.mounted && status == 'queued') {
-                      TopToast.show(context, '引擎忙,任务 #${tk.id} 已排队');
-                    }
-                  } catch (e) {
-                    if (context.mounted) TopToast.show(context, '$e', error: true);
-                  }
-                },
-                icon: const Icon(Icons.play_arrow, size: 15),
-                label: const Text('重跑'),
-              ),
+              _EngineRunControls(key: ValueKey(tk.id), task: tk, state: state),
           ]),
           const SizedBox(height: 18),
           if (tk == null)
@@ -85,6 +73,70 @@ class RunPage extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// 重跑控制:三引擎下拉(初值取任务快照)+ 重跑按钮;选定引擎随本次运行覆盖任务快照。
+class _EngineRunControls extends StatefulWidget {
+  final TaskInfo task;
+  final AppState state;
+  const _EngineRunControls({super.key, required this.task, required this.state});
+
+  @override
+  State<_EngineRunControls> createState() => _EngineRunControlsState();
+}
+
+class _EngineRunControlsState extends State<_EngineRunControls> {
+  String _engine = 'temporal';
+
+  @override
+  void initState() {
+    super.initState();
+    _engine = _engineOf(widget.task.paramsJson);
+  }
+
+  static String _engineOf(String paramsJson) {
+    try {
+      final v = jsonDecode(paramsJson);
+      if (v is Map) return engineOfConfig(v.cast<String, dynamic>());
+    } catch (_) {}
+    return 'temporal';
+  }
+
+  Future<void> _rerun() async {
+    try {
+      final status = await widget.state.runTask(widget.task.id, engine: _engine);
+      if (mounted && status == 'queued') {
+        TopToast.show(context, '引擎忙,任务 #${widget.task.id} 已排队');
+      }
+    } catch (e) {
+      if (mounted) TopToast.show(context, '$e', error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(
+        width: 250,
+        child: StyledDropdown(
+          value: _engine,
+          options: devEngineOptions.keys.toList(),
+          labelOf: (v) => devEngineOptions[v] ?? v,
+          decoration:
+              const InputDecoration(labelText: '修复引擎', isDense: true),
+          onChanged: (v) {
+            if (v != null) setState(() => _engine = v);
+          },
+        ),
+      ),
+      const SizedBox(width: 10),
+      FilledButton.icon(
+        onPressed: _rerun,
+        icon: const Icon(Icons.play_arrow, size: 15),
+        label: const Text('重跑'),
+      ),
+    ]);
   }
 }
 

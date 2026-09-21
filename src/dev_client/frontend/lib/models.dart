@@ -12,6 +12,47 @@ Object? getPath(Map<String, dynamic> cfg, String path) {
   return node;
 }
 
+/// 开发版三引擎选择(创建/重跑任务三选一;映射到配置键,随任务快照固化)。
+const devEngineOptions = <String, String>{
+  'temporal': '时域迁移 temporal(邻帧真实像素,快)',
+  'delogo': '空间修补 delogo(单帧内修补)',
+  'propainter': 'ProPainter 生成式(复杂遮挡,需 GPU)',
+};
+
+/// 从配置快照反推三引擎选择(propainter 强制路由 > delogo > 默认 temporal)。
+String engineOfConfig(Map<String, dynamic> cfg) {
+  final repair = cfg['repair'];
+  final engine = repair is Map ? repair['engine'] : null;
+  final force = repair is Map ? repair['force_engine'] : null;
+  if (force == 'propainter') return 'propainter';
+  if (engine == 'delogo') return 'delogo';
+  return 'temporal';
+}
+
+/// 深拷贝配置并按三引擎选择覆盖 repair/enhance 键(propainter 走时域管线+强制路由)。
+Map<String, dynamic> configWithEngine(Map<String, dynamic> cfg, String engine) {
+  final next = (jsonDecode(jsonEncode(cfg)) as Map).cast<String, dynamic>();
+  final repair =
+      (next['repair'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+  final enhance =
+      (next['enhance'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+  switch (engine) {
+    case 'delogo':
+      repair['engine'] = 'delogo';
+      repair['force_engine'] = '';
+    case 'propainter':
+      repair['engine'] = 'temporal';
+      repair['force_engine'] = 'propainter';
+      enhance['propainter'] = true;
+    default:
+      repair['engine'] = 'temporal';
+      repair['force_engine'] = 'motion';
+  }
+  next['repair'] = repair;
+  next['enhance'] = enhance;
+  return next;
+}
+
 void setPath(Map<String, dynamic> cfg, String path, Object? value) {
   final parts = path.split('.');
   Map<String, dynamic> node = cfg;
