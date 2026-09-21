@@ -42,5 +42,6 @@ func main() {
 	}
 	reg := provider.NewRegistry("")
 	handler := httpserver.New(st, "/tmp/desub-src", reg, []byte(sessionKey)).Handler()
-	lambda.Start(httpadapter.New(handler).ProxyWithContext)
+	// Function URL 事件是 payload v2 结构,必须用 NewV2(New 按 v1 解析会得到空路径,全量 404)
+	lambda.Start(httpadapter.NewV2(handler).ProxyWithContext)
 }

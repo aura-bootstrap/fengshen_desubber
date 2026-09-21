@@ -1,0 +1,98 @@
+# billing_server SAM 模板(移植自 fengshen-slicer deploy/template.yaml):
+#   Lambda provided.al2023 arm64(cmd/lambda 编译的 bootstrap)+ Lambda Function URL(公网 HTTPS,CORS *)
+#   + DynamoDB 单表 fengshen-desubber(redimo/v2 Redis-API 单表存储,pk(B)+sk(B),TTL on exp)
+#   + 最小 IAM。仅 Lambda + DDB,无 API Gateway。全球账号(ap-east-1 香港)。
+#   密钥走 Parameters(NoEcho),真值存同区 SSM SecureString(/fengshen-desubber/*),不进 git。
+#
+# 与 slicer 模板的差异:
+#   - 表 PAY_PER_REQUEST:slicer 的 redimo 已吃满 25/25 永久免费额度,再开 PROVISIONED 25/25 必计费;
+#     计费服务流量极低,按量计费月成本趋零。
+#   - env 无 MASTER_KEY(参数配置中心尚未并 master),有 CARD_PEPPER(卡 HMAC 胡椒)。
+#   drift 红线:表/函数生命周期只经本模板,绝不在 CFN 之外手动 delete/create。
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 峰神·去字幕计费与鉴权平台 billing_server(fengshen-desubber)
+
+Parameters:
+  AdminRootPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: 超级管理员 root 的初始密码(冷启动幂等种入;首次登录后请尽快改密)
+  SessionKey:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: 会话令牌 HMAC 签名密钥(泄露=可伪造会话,轮换会使全部会话失效)
+  CardPepper:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: 卡密 HMAC 胡椒(泄露=可伪造卡密;轮换使全部未核销卡失效)
+  AdminWebOrigin:
+    Type: String
+    Default: '*'
+    Description: 管理端 Web 托管源(CORS AllowOrigins;未定托管先 *)
+
+Resources:
+  # redimo 单表:pk(B)=Redis key、sk(B)=值/成员/meta 类型前缀;无 GSI/LSI(列表走 ScanMetaKeys 分页);
+  # TTL 在 meta 的 exp。PAY_PER_REQUEST(免费额度已被 slicer redimo 占满,见模板头注释)。
+  DesubRedimoTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: fengshen-desubber
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: B }
+        - { AttributeName: sk, AttributeType: B }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      TimeToLiveSpecification:
+        AttributeName: exp
+        Enabled: true
+
+  DesubServerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fengshen-desubber
+      Description: fengshen-desubber-billing-server
+      Runtime: provided.al2023
+      Architectures: [ arm64 ]
+      Handler: bootstrap
+      CodeUri: ../dist/function.zip   # 交叉编译 cmd/lambda → bootstrap 后打成 function.zip(仅含 bootstrap)
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_REDIMO: !Ref DesubRedimoTable
+          CARD_PEPPER: !Ref CardPepper
+          SESSION_KEY: !Ref SessionKey
+          ADMIN_ROOT_PASSWORD: !Ref AdminRootPassword
+      # 仅用 Lambda Function URL 暴露公网 HTTPS;AuthType NONE = 应用层自行鉴权(admin 会话/卡密信封)。
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - !Ref AdminWebOrigin
+          AllowMethods:
+            - '*'
+          AllowHeaders:
+            - '*'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DesubRedimoTable
+        # DynamoDBCrudPolicy 模板不含 TransactWriteItems,单独补
+        - Statement:
+            - Sid: RedimoTransactWrite
+              Effect: Allow
+              Action:
+                - dynamodb:TransactWriteItems
+              Resource: !GetAtt DesubRedimoTable.Arn
+
+Outputs:
+  FunctionUrl:
+    Description: billing_server Lambda Function URL 入口(客户端注入 baseUrl;形如 https://<id>.lambda-url.ap-east-1.on.aws/)
+    Value: !GetAtt DesubServerFunctionUrl.FunctionUrl
