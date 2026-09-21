@@ -32,6 +32,33 @@ class LicenseCard extends StatelessWidget {
     final ck = state.cardKey;
     final hasError = state.cardKeyError != null;
     final activated = ck?.activated ?? false;
+    final loading = state.cardKeyLoading && ck == null;
+    final cloudDown = activated && ck != null && (ck.degraded || ck.stale);
+    // 标题行 + 右上角云端状态胶囊(仿 slicer 授权卡绿底胶囊式样)。
+    final String title;
+    final String pill;
+    final Color pillColor;
+    if (hasError) {
+      title = '授权状态';
+      pill = '连接失败';
+      pillColor = t.danger;
+    } else if (loading) {
+      title = '授权状态';
+      pill = '查询中';
+      pillColor = t.faint;
+    } else if (!activated) {
+      title = '云端去字幕';
+      pill = '未激活';
+      pillColor = t.faint;
+    } else if (cloudDown) {
+      title = '剩余点数';
+      pill = '云端不可达';
+      pillColor = t.warn;
+    } else {
+      title = '剩余点数';
+      pill = '云端可用';
+      pillColor = t.success;
+    }
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -44,9 +71,29 @@ class LicenseCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (state.cardKeyLoading && ck == null)
-          Text('查询中…', style: TextStyle(fontSize: 11, color: t.dim))
-        else if (hasError) ...[
+        Row(children: [
+          Text(title,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: t.ink)),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: pillColor,
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: Text(pill,
+                style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white)),
+          ),
+        ]),
+        if (loading) ...[
+          const SizedBox(height: 4),
+          Text('查询中…', style: TextStyle(fontSize: 11, color: t.dim)),
+        ] else if (hasError) ...[
+          const SizedBox(height: 4),
           Text(state.cardKeyError!,
               style: TextStyle(fontSize: 11, color: t.danger),
               maxLines: 2,
@@ -62,10 +109,7 @@ class LicenseCard extends StatelessWidget {
           ),
         ] else ...[
           if (activated && ck != null) ...[
-            // 「剩余点数」仿 slicer 商业授权标题式样:12px 粗体 ink。
-            Text('剩余点数',
-                style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w700, color: t.ink)),
+            const SizedBox(height: 4),
             Text('${ck.credits} 点',
                 style: TextStyle(
                     fontSize: 20,
@@ -85,9 +129,11 @@ class LicenseCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis),
             ],
-          ] else
+          ] else ...[
+            const SizedBox(height: 4),
             Text('激活卡密后才能使用在线去字幕',
                 style: TextStyle(fontSize: 11, color: t.dim)),
+          ],
           const SizedBox(height: 9),
           InkWell(
             onTap: () => _activate(context),
