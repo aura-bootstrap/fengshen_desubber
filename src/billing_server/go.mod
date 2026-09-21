@@ -14,6 +14,7 @@ require (
 )
 
 require (
+	github.com/aws/aws-lambda-go v1.50.0 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.2 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.19.1 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.1 // indirect
@@ -27,5 +28,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.41.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.48.0 // indirect
 	github.com/aws/smithy-go v1.28.1 // indirect
+	github.com/awslabs/aws-lambda-go-api-proxy v0.16.2 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 )
