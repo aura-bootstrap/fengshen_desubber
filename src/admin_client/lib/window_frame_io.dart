@@ -22,10 +22,19 @@ class AdminWindowFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!Platform.isWindows) return child;
-    return Column(
-      children: [
-        const _TitleBar(),
-        Expanded(child: child),
+    // MaterialApp.builder 位于 Navigator 之上,这里没有 Overlay 祖先;
+    // 标题栏里的 Tooltip(最小化按钮)悬停时 OverlayPortal 会抛
+    // "No Overlay widget found",故自挂一层 Overlay 兜底。
+    return Overlay(
+      initialEntries: [
+        OverlayEntry(
+          builder: (_) => Column(
+            children: [
+              const _TitleBar(),
+              Expanded(child: child),
+            ],
+          ),
+        ),
       ],
     );
   }
