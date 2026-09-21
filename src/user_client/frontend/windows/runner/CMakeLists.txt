@@ -19,6 +19,10 @@ add_executable(${BINARY_NAME} WIN32
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
+# 源文件为 UTF-8 无 BOM;窗口标题含中文,须显式告知 MSVC 源码字符集。
+target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
+# 产物 exe 文件名(进程名/任务管理器名);CMake 目标名必须 ASCII 故经 OUTPUT_NAME 改中文名。
+set_target_properties(${BINARY_NAME} PROPERTIES OUTPUT_NAME "峰神引擎-字幕去除器-用户版")
 
 # dev 构建(Debug/Profile)给资源编译器下 APP_ICON_DEV 定义,Runner.rc 据此切绿色图标。
 set_property(SOURCE "Runner.rc" PROPERTY COMPILE_OPTIONS

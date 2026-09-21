@@ -15,7 +15,7 @@ Future<void> main() async {
   const opts = WindowOptions(
     size: Size(1180, 760),
     minimumSize: Size(960, 620),
-    title: '峰神·去字幕',
+    title: '峰神引擎-字幕去除器-用户版',
     // 隐藏原生标题栏(主题融合由 AppShell 的自定义标题栏接管)
     titleBarStyle: TitleBarStyle.hidden,
     windowButtonVisibility: false,

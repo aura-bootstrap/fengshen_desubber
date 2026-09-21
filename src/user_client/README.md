@@ -29,7 +29,7 @@ frontend/  Flutter (Windows 桌面)          backend/  Go 引擎进程 (stdlib +
 cd backend && go build -o bin/desub-engine.exe ./cmd/desub-engine
 
 # 2. 跑前端(自动查找并拉起 ../backend/bin/desub-engine.exe;
-#    或把 desub-engine.exe 放到 desub_client.exe 同目录)
+#    或把 desub-engine.exe 放到前端 exe(峰神引擎-字幕去除器-用户版.exe)同目录)
 cd ../frontend && flutter run -d windows    # 或 flutter build windows 后运行 exe
 ```
 

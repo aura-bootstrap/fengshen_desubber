@@ -5,7 +5,7 @@
 #define MyAppName "峰神·去字幕"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "峰神引擎"
-#define MyAppExeName "desub_client.exe"
+#define MyAppExeName "峰神引擎-字幕去除器-用户版.exe"
 
 [Setup]
 AppId={{C5D06CAE-CD28-4D3E-9156-93D1943B896C}

@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.fengshen" "\0"
-            VALUE "FileDescription", "desub_dev_client" "\0"
+            VALUE "FileDescription", "峰神引擎-字幕去除器-开发版" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "desub_dev_client" "\0"
+            VALUE "InternalName", "峰神引擎-字幕去除器-开发版" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.fengshen. All rights reserved." "\0"
-            VALUE "OriginalFilename", "desub_dev_ui.exe" "\0"
-            VALUE "ProductName", "desub_dev_client" "\0"
+            VALUE "OriginalFilename", "峰神引擎-字幕去除器-开发版.exe" "\0"
+            VALUE "ProductName", "峰神引擎-字幕去除器-开发版" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

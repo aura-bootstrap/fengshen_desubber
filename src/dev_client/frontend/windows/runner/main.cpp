@@ -5,9 +5,9 @@
 #include "flutter_window.h"
 #include "utils.h"
 
-// Window title = English full name (desub_dev_client); in-app Chinese
-// branding lives in the Flutter-drawn title bar.
-static const wchar_t kWindowTitle[] = L"desub_dev_client";
+// 任务栏显示名(源文件 UTF-8,编译靠 runner/CMakeLists.txt 的 /utf-8);
+// 应用内品牌由 Flutter 自绘标题栏承担。
+static const wchar_t kWindowTitle[] = L"峰神引擎-字幕去除器-开发版";
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {

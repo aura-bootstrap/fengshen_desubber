@@ -6,7 +6,7 @@
 #define MyAppName "峰神·去字幕(开发版)"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "峰神引擎"
-#define MyAppExeName "desub_dev_ui.exe"
+#define MyAppExeName "峰神引擎-字幕去除器-开发版.exe"
 
 [Setup]
 ; 独立 AppId:与用户版/管理版可并存安装

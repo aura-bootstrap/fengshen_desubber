@@ -27,7 +27,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"desub_client", origin, size)) {
+  // 任务栏显示名(源文件 UTF-8,编译靠 runner/CMakeLists.txt 的 /utf-8)
+  if (!window.Create(L"峰神引擎-字幕去除器-用户版", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
