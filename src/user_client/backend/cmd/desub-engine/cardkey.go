@@ -48,7 +48,7 @@ func (s *server) handleCardkeyStatus(w http.ResponseWriter, r *http.Request) {
 	resp["activated"] = true
 	resp["server"] = kf.Server
 	resp["masked"] = maskCardKey(kf.CardKey)
-	resp["machine_hash"] = hash
+	resp["machine_hash"] = hashMask(hash)
 	resp["degraded"] = degraded
 	resp["credits"] = kf.Credits
 
@@ -144,6 +144,24 @@ func activateHTTPCode(err error) int {
 		return apiErr.Status
 	}
 	return http.StatusBadGateway
+}
+
+// hashMask 机器码展示值:取前 16 位按 XXXX-XXXX-XXXX-XXXX 分组明文,不打码,
+// 与 slicer 管理端 groupMachine16 同则、两端显示同一串便于报障核对。
+// 仅作用于展示出口;协议与存储仍为全长 64 位。不足 16 位按实际长度分组。
+func hashMask(h string) string {
+	s := strings.ToUpper(strings.TrimSpace(h))
+	if len(s) > 16 {
+		s = s[:16]
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if i > 0 && i%4 == 0 {
+			b.WriteByte('-')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // maskCardKey 卡面脱敏:留首组(首个 '-' 之前;无分组取前 5 字符)+ 末字符,

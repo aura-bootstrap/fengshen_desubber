@@ -5,9 +5,8 @@ import '../theme.dart';
 import 'cardkey_activate_dialog.dart';
 import 'top_toast.dart';
 
-/// 侧边栏左下角授权卡片(卡密点数版,仿切片生成器 LicenseCard):
-/// 未激活=「立即激活」引导;已激活=剩余点数(大数字)/卡号/服务器三行。
-/// 与切片生成器的区别:授权码那一行换成点数额度的剩余值。
+/// 侧边栏左下角余额卡片:只显示剩余点数与机器码,不显示卡号、无「卡密授权」标题。
+/// 未激活=「立即激活」引导;机器码为引擎出参的前 16 位分组明文(同 slicer 式样)。
 class LicenseCard extends StatelessWidget {
   final AppState state;
   const LicenseCard({super.key, required this.state});
@@ -45,25 +44,6 @@ class LicenseCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text(hasError ? '授权状态' : (activated ? '卡密授权' : '未激活'),
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700, color: t.ink)),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(
-              color: hasError ? t.danger : (activated ? t.success : t.faint),
-              borderRadius: BorderRadius.circular(99),
-            ),
-            child: Text(hasError ? '查询失败' : (activated ? '已激活' : '未激活'),
-                style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white)),
-          ),
-        ]),
-        const SizedBox(height: 4),
         if (state.cardKeyLoading && ck == null)
           Text('查询中…', style: TextStyle(fontSize: 11, color: t.dim))
         else if (hasError) ...[
@@ -89,7 +69,9 @@ class LicenseCard extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                     color: ck.credits > 0 ? t.primaryInk : t.danger)),
             const SizedBox(height: 2),
-            Text('卡号 ${ck.masked}',
+            // 机器码为前 16 位分组明文 XXXX-XXXX-XXXX-XXXX(不打码,引擎出口已大写,
+            // toUpperCase 幂等)。19 字符 @11px ≈ 125px < 内容宽,单行放得下。
+            Text('机器码 ${ck.machineHash.toUpperCase()}',
                 style: TextStyle(fontSize: 11, color: t.dim),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),
