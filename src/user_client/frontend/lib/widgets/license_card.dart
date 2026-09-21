@@ -52,11 +52,11 @@ class LicenseCard extends StatelessWidget {
       pillColor = t.faint;
     } else if (cloudDown) {
       title = '剩余点数';
-      pill = '云端不可达';
+      pill = '云离线';
       pillColor = t.warn;
     } else {
       title = '剩余点数';
-      pill = '云端可用';
+      pill = '云在线';
       pillColor = t.success;
     }
     return Container(
