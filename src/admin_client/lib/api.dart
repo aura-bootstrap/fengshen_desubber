@@ -7,6 +7,10 @@ class ApiException implements Exception {
   final String message;
   ApiException(this.status, this.message);
 
+  bool get unauthorized => status == 401;
+  bool get forbidden => status == 403;
+  bool get conflict => status == 409;
+
   @override
   String toString() => message;
 }
@@ -64,13 +68,49 @@ class CreditTx {
         createdAt = m['CreatedAt'] as String? ?? '';
 }
 
-/// 去字幕计费服务端管理 API:Bearer 管理 token 鉴权。
+/// 管理员账号(服务端 Account 落库形态的脱敏投影,永不含口令)。
+class AccountInfo {
+  final String username;
+  final String role;
+  final String status;
+  final int version; // 乐观锁基线,写操作回传
+  final int createdAt;
+
+  AccountInfo.fromJson(Map<String, dynamic> m)
+      : username = m['username'] as String? ?? '',
+        role = m['role'] as String? ?? '',
+        status = m['status'] as String? ?? '',
+        version = m['version'] as int? ?? 0,
+        createdAt = m['created_at'] as int? ?? 0;
+
+  bool get isRoot => role == 'root';
+  bool get disabled => status == 'disabled';
+}
+
+/// 去字幕计费服务端管理 API:Bearer 会话令牌鉴权(/v1/admin/login 换取)。
 class AdminApi {
   final String base;
   final String token;
+  final String username;
+  final String role; // root|admin
   final http.Client _c = http.Client();
 
-  AdminApi(this.base, this.token);
+  AdminApi(this.base, this.token, {this.username = '', this.role = ''});
+
+  /// 用户名+密码换会话令牌;成功返回带令牌的 AdminApi。
+  static Future<AdminApi> login(
+      String base, String username, String password) async {
+    final anon = AdminApi(base, '');
+    try {
+      final d = await anon._req('POST', '/v1/admin/login',
+          body: {'username': username, 'password': password});
+      return AdminApi(base, d['token'] as String? ?? '',
+          username: d['username'] as String? ?? '',
+          role: d['role'] as String? ?? '');
+    } finally {
+      anon.dispose();
+    }
+  }
 
   Uri _u(String path, [Map<String, String>? q]) =>
       Uri.parse('$base$path').replace(queryParameters: q);
@@ -136,4 +176,45 @@ class AdminApi {
 
   Future<Map<String, dynamic>> cardStatus(String code) async =>
       Map<String, dynamic>.from(await _req('GET', '/v1/cards/$code/status'));
+
+  /// 当前会话身份(启动校验令牌存活 + 取角色)。
+  Future<Map<String, dynamic>> me() async =>
+      Map<String, dynamic>.from(await _req('GET', '/v1/admin/me'));
+
+  /// 登出:服务端 bump 口令纪元,全部在途会话即刻失效。
+  Future<void> logout() => _req('POST', '/v1/admin/logout');
+
+  /// 改本人密码(成功即吊销旧会话,调用方须重新登录)。
+  Future<void> changePassword(String oldPassword, String newPassword) =>
+      _req('POST', '/v1/admin/password',
+          body: {'old_password': oldPassword, 'new_password': newPassword});
+
+  /// 账号列表(仅 root)。
+  Future<List<AccountInfo>> listAccounts() async {
+    final d = await _req('GET', '/v1/admin/accounts');
+    return [
+      for (final m in (d['accounts'] as List? ?? [])) AccountInfo.fromJson(m)
+    ];
+  }
+
+  /// 建普通管理员(仅 root;API 不可建 root)。
+  Future<void> createAccount(String username, String password) =>
+      _req('POST', '/v1/admin/accounts',
+          body: {'username': username, 'password': password});
+
+  /// 禁用/启用管理员(仅 root;禁用即吊销其会话)。version 为乐观锁基线。
+  Future<void> setAccountStatus(String username, String status, int version) =>
+      _req('POST', '/v1/admin/accounts/$username/status',
+          body: {'status': status, 'version': version});
+
+  /// 重置管理员密码(仅 root;旧会话随之失效)。
+  Future<void> resetAccountPassword(
+          String username, String password, int version) =>
+      _req('POST', '/v1/admin/accounts/$username/password',
+          body: {'password': password, 'version': version});
+
+  /// 硬删管理员(仅 root;root 不可删)。
+  Future<void> deleteAccount(String username, int version) =>
+      _req('POST', '/v1/admin/accounts/$username/delete',
+          body: {'version': version});
 }

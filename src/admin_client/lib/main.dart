@@ -3,8 +3,10 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'api.dart';
 import 'error_widget_capture.dart';
+import 'pages/accounts_page.dart';
 import 'pages/audit_page.dart';
 import 'pages/cards_page.dart';
+import 'pages/password_page.dart';
 import 'pages/tx_page.dart';
 import 'theme.dart';
 import 'window_frame.dart';
@@ -48,7 +50,7 @@ class AdminApp extends StatelessWidget {
   }
 }
 
-/// 登录页:计费服务器地址 + 管理 token(仿 slicer 登录页卡片式布局)。
+/// 登录页:计费服务器地址 + 管理员用户名/密码(仿 slicer 登录页卡片式布局)。
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -58,7 +60,8 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final _server = TextEditingController();
-  final _token = TextEditingController();
+  final _username = TextEditingController();
+  final _password = TextEditingController();
   bool _busy = false;
   bool _obscure = true;
   String _error = '';
@@ -66,7 +69,8 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void dispose() {
     _server.dispose();
-    _token.dispose();
+    _username.dispose();
+    _password.dispose();
     super.dispose();
   }
 
@@ -76,7 +80,10 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   bool get _canSubmit =>
-      _serverOk && _token.text.trim().isNotEmpty && !_busy;
+      _serverOk &&
+      _username.text.trim().isNotEmpty &&
+      _password.text.isNotEmpty &&
+      !_busy;
 
   Future<void> _login() async {
     if (!_canSubmit) return;
@@ -84,15 +91,17 @@ class _LoginPageState extends State<LoginPage> {
       _busy = true;
       _error = '';
     });
-    final api = AdminApi(
-        _server.text.trim().replaceAll(RegExp(r'/+$'), ''), _token.text.trim());
+    final base = _server.text.trim().replaceAll(RegExp(r'/+$'), '');
     try {
-      await api.listCards(); // 验证 token 有效
-      if (!mounted) return;
+      final api =
+          await AdminApi.login(base, _username.text.trim(), _password.text);
+      if (!mounted) {
+        api.dispose();
+        return;
+      }
       Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => AdminShell(api: api)));
     } catch (e) {
-      api.dispose();
       setState(() {
         _busy = false;
         _error = '$e';
@@ -127,7 +136,7 @@ class _LoginPageState extends State<LoginPage> {
                             fontSize: 17, fontWeight: FontWeight.w700, color: t.ink)),
                   ]),
                   const SizedBox(height: 6),
-                  Text('输入计费服务器地址与管理 token',
+                  Text('输入计费服务器地址与管理员账号',
                       style: TextStyle(fontSize: 12.5, color: t.dim)),
                   const SizedBox(height: 20),
                   TextField(
@@ -147,13 +156,25 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 14),
                   TextField(
-                    controller: _token,
+                    controller: _username,
+                    enabled: !_busy,
+                    style: TextStyle(
+                        fontSize: 13, color: t.ink, fontFamily: AppConst.fontMono),
+                    decoration: const InputDecoration(
+                      labelText: '用户名',
+                      hintText: 'root 或管理员账号',
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _password,
                     enabled: !_busy,
                     obscureText: _obscure,
                     style: TextStyle(
                         fontSize: 13, color: t.ink, fontFamily: AppConst.fontMono),
                     decoration: InputDecoration(
-                      labelText: '管理 token',
+                      labelText: '密码',
                       suffixIcon: IconButton(
                         icon: Icon(
                             _obscure ? Icons.visibility_off : Icons.visibility,
@@ -229,6 +250,13 @@ class _AdminShellState extends State<AdminShell> {
           _NavItem('tx', Icons.payments_outlined, '交易流水',
               () => TxPage(api: widget.api, initialCardId: _txCardId)),
         ]),
+        _NavGroup('账户', [
+          _NavItem('password', Icons.lock_reset, '修改密码',
+              () => PasswordPage(api: widget.api, onChanged: _relogin)),
+          if (widget.api.role == 'root')
+            _NavItem('accounts', Icons.manage_accounts, '账号管理',
+                () => AccountsPage(api: widget.api)),
+        ]),
       ];
 
   void _onNav(String id) {
@@ -239,7 +267,18 @@ class _AdminShellState extends State<AdminShell> {
     }
   }
 
-  void _logout() {
+  /// 退出登录:先走服务端吊销(bump 口令纪元,全部在途会话失效),再回登录页。
+  Future<void> _logout() async {
+    try {
+      await widget.api.logout();
+    } catch (_) {
+      // 网络失败/会话已死也照常本地登出
+    }
+    _relogin();
+  }
+
+  /// 回登录页(改密成功后会话已被服务端吊销,直接走这条)。
+  void _relogin() {
     widget.api.dispose();
     Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const LoginPage()));
@@ -348,6 +387,37 @@ class _AdminShellState extends State<AdminShell> {
                 ],
               ],
             ),
+          ),
+          // 当前登录身份(用户名 + 角色徽标)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            child: Row(children: [
+              Icon(Icons.account_circle_outlined, size: 18, color: t.faint),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(widget.api.username,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: t.ink,
+                        fontFamily: AppConst.fontMono)),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                    color: t.primarySoft,
+                    borderRadius: BorderRadius.circular(99)),
+                child: Text(
+                  widget.api.role == 'root' ? '超级管理员' : '管理员',
+                  style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: t.primaryInk),
+                ),
+              ),
+            ]),
           ),
           Center(
             child: OutlinedButton.icon(
