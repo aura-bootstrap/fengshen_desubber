@@ -215,18 +215,20 @@ class _AdminShellState extends State<AdminShell> {
   String _page = 'cards';
   final _txCardId = ValueNotifier<int>(0);
 
-  List<_NavItem> get _items => [
-        _NavItem('cards', Icons.key, '卡密',
-            () => CardsPage(
-                api: widget.api,
-                onShowTx: (id) {
-                  _txCardId.value = id;
-                  _onNav('tx');
-                })),
-        _NavItem('audit', Icons.receipt_long, '审计',
-            () => AuditPage(api: widget.api)),
-        _NavItem('tx', Icons.payments_outlined, '交易流水',
-            () => TxPage(api: widget.api, initialCardId: _txCardId)),
+  List<_NavGroup> get _groups => [
+        _NavGroup('工作区', [
+          _NavItem('cards', Icons.key, '授权码',
+              () => CardsPage(
+                  api: widget.api,
+                  onShowTx: (id) {
+                    _txCardId.value = id;
+                    _onNav('tx');
+                  })),
+          _NavItem('audit', Icons.receipt_long, '审计',
+              () => AuditPage(api: widget.api)),
+          _NavItem('tx', Icons.payments_outlined, '交易流水',
+              () => TxPage(api: widget.api, initialCardId: _txCardId)),
+        ]),
       ];
 
   void _onNav(String id) {
@@ -247,8 +249,9 @@ class _AdminShellState extends State<AdminShell> {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final wide = MediaQuery.of(context).size.width >= 900;
-    final items = _items;
-    final cur = items.firstWhere((i) => i.id == _page, orElse: () => items[0]);
+    final groups = _groups;
+    final all = [for (final g in groups) ...g.items];
+    final cur = all.firstWhere((i) => i.id == _page, orElse: () => all[0]);
     final body = SafeArea(child: cur.build());
     if (!wide) {
       return Scaffold(
@@ -266,7 +269,7 @@ class _AdminShellState extends State<AdminShell> {
         ),
         drawer: Drawer(
           width: 236,
-          child: SafeArea(child: _sidebar(t, items, cur.id)),
+          child: SafeArea(child: _sidebar(t, groups, cur.id)),
         ),
         body: body,
       );
@@ -274,14 +277,14 @@ class _AdminShellState extends State<AdminShell> {
     return Scaffold(
       body: Row(
         children: [
-          _sidebar(t, items, cur.id),
+          _sidebar(t, groups, cur.id),
           Expanded(child: body),
         ],
       ),
     );
   }
 
-  Widget _sidebar(AppTokens t, List<_NavItem> items, String currentId) {
+  Widget _sidebar(AppTokens t, List<_NavGroup> groups, String currentId) {
     return Container(
       width: 236,
       decoration: BoxDecoration(
@@ -338,8 +341,11 @@ class _AdminShellState extends State<AdminShell> {
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
-                const _SectionLabel('工作区'),
-                for (final it in items) _navItem(t, it, currentId == it.id),
+                for (final g in groups) ...[
+                  if (g.section.isNotEmpty) _SectionLabel(g.section),
+                  for (final it in g.items) _navItem(t, it, currentId == it.id),
+                  const SizedBox(height: 10),
+                ],
               ],
             ),
           ),
@@ -388,6 +394,12 @@ class _AdminShellState extends State<AdminShell> {
       ),
     );
   }
+}
+
+class _NavGroup {
+  final String section; // 空 = 无节标题
+  final List<_NavItem> items;
+  const _NavGroup(this.section, this.items);
 }
 
 class _NavItem {

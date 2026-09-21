@@ -75,7 +75,7 @@ class _CardsPageState extends State<CardsPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Text('卡密',
+            Text('授权码',
                 style: TextStyle(
                     fontSize: 21, fontWeight: FontWeight.w700, color: t.ink)),
             const Spacer(),
