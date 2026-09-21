@@ -17,6 +17,10 @@ const kAppVersion = '1.0.0';
 /// 管理版标识(三端统一命名:开发版/用户版/管理版)。
 const kAppEdition = '管理版';
 
+/// 计费服务地址:构建期 `--dart-define=DESUB_BILLING_BASE=...` 注入(对齐 slicer
+/// 管理版固定线上地址的思路;desubber 尚未发布线上实例,默认空,空时登录直接报错)。
+const kBillingBase = String.fromEnvironment('DESUB_BILLING_BASE');
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   installErrorWidgetCapture();
@@ -50,7 +54,7 @@ class AdminApp extends StatelessWidget {
   }
 }
 
-/// 登录页:计费服务器地址 + 管理员用户名/密码(仿 slicer 登录页卡片式布局)。
+/// 登录页:管理员用户名/密码(仿 slicer 登录页卡片式布局;服务器地址编译期注入)。
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -59,7 +63,6 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _server = TextEditingController();
   final _username = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false;
@@ -68,19 +71,12 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
-    _server.dispose();
     _username.dispose();
     _password.dispose();
     super.dispose();
   }
 
-  bool get _serverOk {
-    final s = _server.text.trim();
-    return s.startsWith('http://') || s.startsWith('https://');
-  }
-
   bool get _canSubmit =>
-      _serverOk &&
       _username.text.trim().isNotEmpty &&
       _password.text.isNotEmpty &&
       !_busy;
@@ -91,7 +87,14 @@ class _LoginPageState extends State<LoginPage> {
       _busy = true;
       _error = '';
     });
-    final base = _server.text.trim().replaceAll(RegExp(r'/+$'), '');
+    if (kBillingBase.isEmpty) {
+      setState(() {
+        _busy = false;
+        _error = '服务端地址未配置(请升级或联系发行方)';
+      });
+      return;
+    }
+    final base = kBillingBase.replaceAll(RegExp(r'/+$'), '');
     try {
       final api =
           await AdminApi.login(base, _username.text.trim(), _password.text);
@@ -136,28 +139,13 @@ class _LoginPageState extends State<LoginPage> {
                             fontSize: 17, fontWeight: FontWeight.w700, color: t.ink)),
                   ]),
                   const SizedBox(height: 6),
-                  Text('输入计费服务器地址与管理员账号',
+                  Text('输入管理员账号密码',
                       style: TextStyle(fontSize: 12.5, color: t.dim)),
                   const SizedBox(height: 20),
                   TextField(
-                    controller: _server,
-                    enabled: !_busy,
-                    autofocus: true,
-                    style: TextStyle(
-                        fontSize: 13, color: t.ink, fontFamily: AppConst.fontMono),
-                    decoration: InputDecoration(
-                      labelText: '服务器地址',
-                      hintText: 'http://host:18080',
-                      errorText: _server.text.isEmpty || _serverOk
-                          ? null
-                          : '需以 http:// 或 https:// 开头',
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  const SizedBox(height: 14),
-                  TextField(
                     controller: _username,
                     enabled: !_busy,
+                    autofocus: true,
                     style: TextStyle(
                         fontSize: 13, color: t.ink, fontFamily: AppConst.fontMono),
                     decoration: const InputDecoration(
