@@ -1,8 +1,11 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func openTemp(t *testing.T) *TaskDB {
@@ -90,5 +93,76 @@ func TestListWindow(t *testing.T) {
 	}
 	if n, _ := db.CountTasks(); n != 5 {
 		t.Fatalf("count %d, want 5", n)
+	}
+}
+
+// 外部连接持写锁时,busy_timeout 让写入等待锁释放而不是立刻 SQLITE_BUSY。
+func TestBusyTimeoutWaitsForExternalLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasks.db")
+	db, err := OpenTaskDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	id, err := db.CreateTask(&Task{Name: "x", SrcPath: "s", OutName: "o", ParamsJSON: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟另一个进程(如残留引擎实例)持写锁 300ms。
+	locker, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	tx, err := locker.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`UPDATE tasks SET name=name WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		tx.Rollback()
+	}()
+
+	start := time.Now()
+	if err := db.SetStatus(id, TaskRunning); err != nil {
+		t.Fatalf("write under external lock should wait and succeed, got %v", err)
+	}
+	if el := time.Since(start); el < 250*time.Millisecond {
+		t.Fatalf("returned in %v without waiting for lock release", el)
+	}
+}
+
+// 单连接串行化:多 goroutine 读写互撞不应出现 SQLITE_BUSY。
+func TestConcurrentReadWrite(t *testing.T) {
+	db := openTemp(t)
+	id, err := db.CreateTask(&Task{Name: "x", SrcPath: "s", OutName: "o", ParamsJSON: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				if i%2 == 0 {
+					if err := db.UpdateProgress(id, "repair", j, 20); err != nil {
+						errs <- err
+					}
+				} else if _, err := db.ListTasksBefore(0, 5); err != nil {
+					errs <- err
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }

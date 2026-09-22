@@ -56,6 +56,14 @@ func OpenTaskDB(path string) (*TaskDB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 单连接串行化:DELETE 日志模式下读写互斥,连接池多连接撞车会直接
+	// SQLITE_BUSY(默认 busy_timeout=0);限 1 连接后 busy_timeout 常驻生效,
+	// 跨进程占用(如残留引擎实例)最多等 5s 而不是立刻报错。
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// Docker Desktop bind mounts corrupt WAL; delete-journal is the safe mode.
 	if _, err := db.Exec(`PRAGMA journal_mode=DELETE`); err != nil {
 		db.Close()
