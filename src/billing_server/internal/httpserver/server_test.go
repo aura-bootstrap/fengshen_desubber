@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -222,7 +223,7 @@ func (e *env) createTask(t *testing.T) (int, []byte) {
 	t.Helper()
 	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/tasks", nil)
 	req.Header.Set("Authorization", "Bearer "+e.userTok)
-	req.Header.Set("X-Video-Filename", "v.mp4")
+	req.Header.Set("X-Video-Filename", `C:\private\来源样片.mp4`)
 	req.Header.Set("X-Machine-Hash", e.machine)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -310,8 +311,24 @@ func TestFullFlowSuccess(t *testing.T) {
 	}
 
 	completed := waitStatus(t, e, taskID, "completed")
-	if completed["cost"] != float64(2) || completed["duration_sec"] != float64(65) {
+	if completed["cost"] != float64(2) || completed["duration_sec"] != float64(65) ||
+		completed["original_filename"] != "来源样片.mp4" {
 		t.Fatalf("settlement wrong: %v", completed)
+	}
+	code, txBody := e.do(t, "GET", "/v1/admin/transactions?user_id="+fmt.Sprint(e.userID), e.adminTok, nil)
+	if code != http.StatusOK {
+		t.Fatalf("transactions: %d %s", code, txBody)
+	}
+	var txs []ddbstore.CreditTx
+	json.Unmarshal(txBody, &txs)
+	foundFilename := false
+	for _, tx := range txs {
+		if tx.TaskID == taskID && tx.OriginalFilename == "来源样片.mp4" {
+			foundFilename = true
+		}
+	}
+	if !foundFilename {
+		t.Fatalf("transaction filename missing: %+v", txs)
 	}
 
 	// TOS 临时输入视频已即时清理
@@ -752,6 +769,34 @@ func TestActivateFlow(t *testing.T) {
 	json.Unmarshal(b, &bal)
 	if bal.Credits != 8 {
 		t.Fatalf("balance after unrevoke want 8, got %d", bal.Credits)
+	}
+}
+
+func TestGenerateCardsAutoBatch(t *testing.T) {
+	e := setup(t, nil)
+	generate := func(count int) []struct {
+		Batch string `json:"batch"`
+	} {
+		code, body := e.do(t, "POST", "/v1/admin/cards/generate", e.adminTok,
+			map[string]any{"count": count, "credits": 10, "name": "auto"})
+		if code != http.StatusCreated {
+			t.Fatalf("generate: %d %s", code, body)
+		}
+		var out struct {
+			Cards []struct {
+				Batch string `json:"batch"`
+			} `json:"cards"`
+		}
+		json.Unmarshal(body, &out)
+		return out.Cards
+	}
+	first := generate(2)
+	if len(first) != 2 || first[0].Batch != "1" || first[1].Batch != "1" {
+		t.Fatalf("first auto batch: %+v", first)
+	}
+	second := generate(1)
+	if len(second) != 1 || second[0].Batch != "2" {
+		t.Fatalf("second auto batch: %+v", second)
 	}
 }
 

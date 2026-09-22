@@ -22,20 +22,21 @@ const (
 // CardID 为提交任务所用凭证卡（归因/可见性）；费用走 MachineHash 机器账户。
 // SrcKey 为 TOS 输入对象键（客户端直传）；ResultURL 为算子侧成片地址（服务端不中转）。
 type Task struct {
-	ID          string `json:"id"`
-	CardID      int64  `json:"card_id"`
-	CardHash    string `json:"card_hash"`
-	MachineHash string `json:"machine_hash"`
-	Provider    string `json:"provider"`
-	SrcKey      string `json:"src_key"`
-	ResultURL   string `json:"result_url,omitempty"`
-	DurationSec int64  `json:"duration_sec"`
-	Cost        int64  `json:"cost"`
-	Status      string `json:"status"`
-	Error       string `json:"error,omitempty"`
-	LasTaskID   string `json:"las_task_id,omitempty"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	ID               string `json:"id"`
+	CardID           int64  `json:"card_id"`
+	CardHash         string `json:"card_hash"`
+	MachineHash      string `json:"machine_hash"`
+	Provider         string `json:"provider"`
+	SrcKey           string `json:"src_key"`
+	ResultURL        string `json:"result_url,omitempty"`
+	DurationSec      int64  `json:"duration_sec"`
+	Cost             int64  `json:"cost"`
+	Status           string `json:"status"`
+	Error            string `json:"error,omitempty"`
+	LasTaskID        string `json:"las_task_id,omitempty"`
+	CreatedAt        int64  `json:"created_at"`
+	UpdatedAt        int64  `json:"updated_at"`
+	OriginalFilename string `json:"original_filename,omitempty"`
 }
 
 func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {

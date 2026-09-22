@@ -22,6 +22,11 @@ func (s *Server) generateCards(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "1<=count<=1000 and credits>=0 required")
 		return
 	}
+	batch, err := s.st.AllocateBatch(r.Context(), in.Batch)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	type issued struct {
 		ID      int64  `json:"id"`
 		Code    string `json:"code"`
@@ -40,7 +45,7 @@ func (s *Server) generateCards(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = fmt.Sprintf("card-%s", code[14:])
 		}
-		c, err := s.st.CreateCard(r.Context(), name, code, in.Credits, in.Batch)
+		c, err := s.st.CreateCard(r.Context(), name, code, in.Credits, batch)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -49,7 +54,7 @@ func (s *Server) generateCards(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.st.AppendAudit(r.Context(), ddbstore.AuditEntry{
 		Actor: principalOf(r).Admin.Username, Action: "generate",
-		Target: in.Batch, Detail: fmt.Sprintf("count=%d credits=%d", in.Count, in.Credits), OK: true,
+		Target: batch, Detail: fmt.Sprintf("count=%d credits=%d", in.Count, in.Credits), OK: true,
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{"cards": out})
 }

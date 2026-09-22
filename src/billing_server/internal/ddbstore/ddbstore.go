@@ -84,7 +84,7 @@ func New(ddb *dynamodb.Client, tableName string) *Store {
 }
 
 // NewFromEnv 按环境变量构建：DDB_ENDPOINT 非空走本地（固定假凭据），
-// TABLE_REDIMO 缺省 fengshen-desubber，AWS_REGION 缺省 us-east-1。
+// TABLE_REDIMO 缺省 redimo，AWS_REGION 缺省 us-east-1。
 func NewFromEnv(ctx context.Context) (*Store, error) {
 	var opts []func(*config.LoadOptions) error
 	if ep := os.Getenv("DDB_ENDPOINT"); ep != "" {
@@ -101,7 +101,7 @@ func NewFromEnv(ctx context.Context) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := New(dynamodb.NewFromConfig(cfg), envOr("TABLE_REDIMO", "fengshen-desubber"))
+	st := New(dynamodb.NewFromConfig(cfg), envOr("TABLE_REDIMO", "redimo"))
 	st.Pepper = os.Getenv("CARD_PEPPER")
 	return st, nil
 }

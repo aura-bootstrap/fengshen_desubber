@@ -1,14 +1,9 @@
 # billing_server SAM 模板(移植自 fengshen-slicer deploy/template.yaml):
 #   Lambda provided.al2023 arm64(cmd/lambda 编译的 bootstrap)+ Lambda Function URL(公网 HTTPS,CORS *)
-#   + DynamoDB 单表 fengshen-desubber(redimo/v2 Redis-API 单表存储,pk(B)+sk(B),TTL on exp)
-#   + 最小 IAM。仅 Lambda + DDB,无 API Gateway。全球账号(ap-east-1 香港)。
+#   + 既有 DynamoDB 单表 redimo(redimo/v2 Redis-API 单表存储,pk(B)+sk(B),TTL on exp)
+#   + 最小 IAM。仅创建 Lambda,不创建/管理 redimo 表。全球账号(ap-east-1 香港)。
+#   业务键统一使用 fengshen-desubber: 前缀,不迁移旧专用表数据。
 #   密钥走 Parameters(NoEcho),真值存同区 SSM SecureString(/fengshen-desubber/*),不进 git。
-#
-# 与 slicer 模板的差异:
-#   - 表 PAY_PER_REQUEST:slicer 的 redimo 已吃满 25/25 永久免费额度,再开 PROVISIONED 25/25 必计费;
-#     计费服务流量极低,按量计费月成本趋零。
-#   - env 无 MASTER_KEY(参数配置中心尚未并 master),有 CARD_PEPPER(卡 HMAC 胡椒)。
-#   drift 红线:表/函数生命周期只经本模板,绝不在 CFN 之外手动 delete/create。
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: 峰神·去字幕计费与鉴权平台 billing_server(fengshen-desubber)
@@ -47,25 +42,6 @@ Parameters:
     Description: 管理端 Web 托管源(CORS AllowOrigins;未定托管先 *)
 
 Resources:
-  # redimo 单表:pk(B)=Redis key、sk(B)=值/成员/meta 类型前缀;无 GSI/LSI(列表走 ScanMetaKeys 分页);
-  # TTL 在 meta 的 exp。PAY_PER_REQUEST(免费额度已被 slicer redimo 占满,见模板头注释)。
-  DesubRedimoTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: fengshen-desubber
-      BillingMode: PAY_PER_REQUEST
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-      AttributeDefinitions:
-        - { AttributeName: pk, AttributeType: B }
-        - { AttributeName: sk, AttributeType: B }
-      KeySchema:
-        - { AttributeName: pk, KeyType: HASH }
-        - { AttributeName: sk, KeyType: RANGE }
-      TimeToLiveSpecification:
-        AttributeName: exp
-        Enabled: true
-
   DesubServerFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -76,14 +52,14 @@ Resources:
       Handler: bootstrap
       CodeUri: ../dist/function.zip   # 交叉编译 cmd/lambda → bootstrap 后打成 function.zip(仅含 bootstrap)
       MemorySize: 256
-      Timeout: 30   # submit 阶段 Lambda→北京 TOS 跨境 Range 探测 + LAS 提交,10s 不够
+      Timeout: 30
       Environment:
         Variables:
-          TABLE_REDIMO: !Ref DesubRedimoTable
+          TABLE_REDIMO: redimo
           CARD_PEPPER: !Ref CardPepper
           SESSION_KEY: !Ref SessionKey
           ADMIN_ROOT_PASSWORD: !Ref AdminRootPassword
-          # las 平台(火山 TOS+LAS):双机密非空即注册,在线建单不再 503(无 worker,云端阶段不推进)
+          # las 平台(火山 TOS+LAS):双机密非空即注册,任务由客户端轮询推进并按 LAS 权威时长结算
           TOS_ENDPOINT: tos-cn-beijing.volces.com
           TOS_REGION: cn-beijing
           TOS_BUCKET: jy-subtitle-20260908
@@ -105,14 +81,14 @@ Resources:
             - '*'
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref DesubRedimoTable
+            TableName: redimo
         # DynamoDBCrudPolicy 模板不含 TransactWriteItems,单独补
         - Statement:
             - Sid: RedimoTransactWrite
               Effect: Allow
               Action:
                 - dynamodb:TransactWriteItems
-              Resource: !GetAtt DesubRedimoTable.Arn
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/redimo
 
 Outputs:
   FunctionUrl:

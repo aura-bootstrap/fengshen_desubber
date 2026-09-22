@@ -2,8 +2,8 @@ package ddbstore
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -12,13 +12,14 @@ import (
 // CreditTx 资金流水。JSON 字段名（ID/UserID/TaskID/...）是 /v1/admin/transactions
 // 的冻结协议形态，不得加 tag 改名。UserID 现为卡 id。
 type CreditTx struct {
-	ID           int64
-	UserID       int64
-	TaskID       string
-	Kind         string // debit|refund|grant
-	Amount       int64
-	BalanceAfter int64
-	CreatedAt    time.Time
+	ID               int64
+	UserID           int64
+	TaskID           string
+	Kind             string // debit|refund|grant
+	Amount           int64
+	BalanceAfter     int64
+	CreatedAt        time.Time
+	OriginalFilename string `json:"OriginalFilename,omitempty"`
 }
 
 // AppendMachineTx 追加机器账户流水（Hash field=auditSK，追加序=时间序）。

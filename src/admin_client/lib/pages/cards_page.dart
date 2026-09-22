@@ -223,7 +223,6 @@ class _CardsPageState extends State<CardsPage> {
   void _generateDialog(BuildContext context) {
     final count = TextEditingController(text: '1');
     final credits = TextEditingController(text: '600');
-    final batch = TextEditingController();
     final name = TextEditingController();
     showDialog(
       context: context,
@@ -243,12 +242,8 @@ class _CardsPageState extends State<CardsPage> {
                 decoration: const InputDecoration(labelText: '每张点数')),
             const SizedBox(height: 12),
             TextField(
-                controller: batch,
-                decoration: const InputDecoration(labelText: '批次(可空)')),
-            const SizedBox(height: 12),
-            TextField(
                 controller: name,
-                decoration: const InputDecoration(labelText: '名称(可空)')),
+                decoration: const InputDecoration(labelText: '备注（可选）')),
           ]),
         ),
         actions: [
@@ -262,7 +257,7 @@ class _CardsPageState extends State<CardsPage> {
               Navigator.pop(ctx);
               try {
                 final cards = await widget.api
-                    .generate(n, cr, batch.text.trim(), name.text.trim());
+                    .generate(n, cr, name.text.trim());
                 if (!mounted) return;
                 _issuedDialog(cards);
                 _load();

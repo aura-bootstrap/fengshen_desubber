@@ -116,6 +116,7 @@ class _TxPageState extends State<TxPage> {
                               DataColumn(label: Text('类型')),
                               DataColumn(label: Text('金额')),
                               DataColumn(label: Text('余额')),
+                              DataColumn(label: Text('文件')),
                               DataColumn(label: Text('任务')),
                               DataColumn(label: Text('时间')),
                             ],
@@ -130,6 +131,9 @@ class _TxPageState extends State<TxPage> {
                                               ? t.danger
                                               : t.success))),
                                   DataCell(Text('${tx.balanceAfter}')),
+                                  DataCell(Text(tx.originalFilename.isEmpty
+                                      ? '—'
+                                      : tx.originalFilename)),
                                   DataCell(Text(tx.taskId,
                                       style: const TextStyle(
                                           fontFamily: AppConst.fontMono,

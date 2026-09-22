@@ -9,7 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 
@@ -285,9 +285,9 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "需要卡号调用")
 		return
 	}
-	filename := filepath.Base(r.Header.Get("X-Video-Filename"))
-	ext := strings.ToLower(filepath.Ext(filename))
-	if ext != ".mp4" && ext != ".mov" {
+	filename := path.Base(strings.ReplaceAll(strings.TrimSpace(r.Header.Get("X-Video-Filename")), "\\", "/"))
+	ext := strings.ToLower(path.Ext(filename))
+	if (ext != ".mp4" && ext != ".mov") || filename == "." {
 		writeErr(w, http.StatusBadRequest, "only mp4/mov supported")
 		return
 	}
@@ -310,7 +310,10 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 	taskID := uuid.NewString()
 	srcKey := fmt.Sprintf("input/%s%s", taskID, ext)
-	t := &ddbstore.Task{ID: taskID, CardID: c.ID, Provider: providerName, SrcKey: srcKey}
+	t := &ddbstore.Task{
+		ID: taskID, CardID: c.ID, Provider: providerName, SrcKey: srcKey,
+		OriginalFilename: filename,
+	}
 	if err := s.st.CreateUploadingTask(r.Context(), t); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -456,7 +459,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"task_id": t.ID, "status": t.Status, "duration_sec": t.DurationSec,
-		"cost": t.Cost, "error": t.Error,
+		"cost": t.Cost, "error": t.Error, "original_filename": t.OriginalFilename,
 	})
 }
 
@@ -574,6 +577,14 @@ func (s *Server) transactions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	for i := range txs {
+		if txs[i].Kind != "debit" && txs[i].Kind != "refund" {
+			continue
+		}
+		if task, err := s.st.GetTask(r.Context(), txs[i].TaskID); err == nil {
+			txs[i].OriginalFilename = task.OriginalFilename
+		}
 	}
 	if txs == nil {
 		txs = []ddbstore.CreditTx{}

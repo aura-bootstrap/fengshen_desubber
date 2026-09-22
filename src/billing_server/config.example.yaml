@@ -8,7 +8,7 @@ card_pepper: "change-me-card-pepper" # 卡哈希 HMAC 密钥（env CARD_PEPPER �
 
 # DynamoDB（redimo 单表）由环境变量配置：
 #   DDB_ENDPOINT  非空走本地/自建端点（如 http://localhost:18000），空走 AWS
-#   TABLE_REDIMO  表名，缺省 fengshen-desubber
+#   TABLE_REDIMO  表名，缺省 redimo
 #   AWS_REGION    缺省 us-east-1
 
 # TOS 对象存储（默认平台 las 的上传侧）

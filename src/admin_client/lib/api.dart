@@ -58,6 +58,7 @@ class CreditTx {
   final int amount;
   final int balanceAfter;
   final String createdAt;
+  final String originalFilename;
 
   CreditTx.fromJson(Map<String, dynamic> m)
       : id = m['ID'] as int? ?? 0,
@@ -65,7 +66,8 @@ class CreditTx {
         kind = m['Kind'] as String? ?? '',
         amount = m['Amount'] as int? ?? 0,
         balanceAfter = m['BalanceAfter'] as int? ?? 0,
-        createdAt = m['CreatedAt'] as String? ?? '';
+        createdAt = m['CreatedAt'] as String? ?? '',
+        originalFilename = m['OriginalFilename'] as String? ?? '';
 }
 
 /// 管理员账号(服务端 Account 落库形态的脱敏投影,永不含口令)。
@@ -141,11 +143,11 @@ class AdminApi {
     return [for (final m in (d['cards'] as List? ?? [])) CardInfo.fromJson(m)];
   }
 
-  /// 发卡,明文卡面仅此一次返回。
+  /// 发卡,批次由服务端自动分配,明文卡面仅此一次返回。
   Future<List<Map<String, dynamic>>> generate(
-      int count, int credits, String batch, String name) async {
+      int count, int credits, String name) async {
     final d = await _req('POST', '/v1/admin/cards/generate',
-        body: {'count': count, 'credits': credits, 'batch': batch, 'name': name});
+        body: {'count': count, 'credits': credits, 'batch': '', 'name': name});
     return [for (final m in (d['cards'] as List? ?? [])) Map<String, dynamic>.from(m)];
   }
 

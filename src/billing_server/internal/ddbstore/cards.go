@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	redimo "github.com/aura-studio/redimo/v2"
 
@@ -19,6 +20,47 @@ const (
 	// 读取路径（auth/activate）命中时懒迁移为 redeemed。
 	CardActive = "active"
 )
+
+func (s *Store) AllocateBatch(ctx context.Context, batch string) (string, error) {
+	requested, numeric := int64(0), false
+	if batch != "" {
+		if n, err := strconv.ParseInt(batch, 10, 64); err == nil && n >= 0 && strconv.FormatInt(n, 10) == batch {
+			requested, numeric = n, true
+		} else {
+			return batch, nil
+		}
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		rv, err := s.cli.WithContext(ctx).GET(keySeq + "batch")
+		if err != nil {
+			return "", err
+		}
+		cur, exists := int64(0), !rv.Empty()
+		if exists {
+			cur, err = strconv.ParseInt(rv.String(), 10, 64)
+			if err != nil {
+				return "", err
+			}
+		}
+		if numeric && requested <= cur {
+			return batch, nil
+		}
+		next := cur + 1
+		if numeric {
+			next = requested
+		}
+		ok, err := s.cli.WithContext(ctx).SETCAS(
+			keySeq+"batch", redimo.IntValue{I: next}, redimo.IntValue{I: cur}, exists,
+		)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return strconv.FormatInt(next, 10), nil
+		}
+	}
+	return "", errors.New("batch counter conflict")
+}
 
 // Card 卡账户：卡=一次性充值券，激活即核销，点数转入机器账户（见 machines.go）。
 // 核销后卡面仅作调用凭证（MachineHash 映射保留）；Balance 核销后恒 0，余额查机器账户。

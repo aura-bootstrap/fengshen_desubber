@@ -30,7 +30,7 @@ powershell -File installer\billing_server\deploy.ps1 -BuildOnly
 
 - 免管理员:走当前用户的 Docker Desktop,无需 sudo/服务注册。
 - 多实例:用不同 `-Container` / `-Port` / `-Config` 即可并存(如沙盒 18180、生产 18080)。
-- 表初始化:DynamoDB 表由 `src\billing_server\cmd\mktables` 一次性创建(本地 DDB 容器或 AWS),详见源码注释。
+- 数据表:生产直接复用现有 DynamoDB 表 `redimo`,业务键统一带 `fengshen-desubber:` 前缀;不迁移旧专用表数据。`cmd\mktables` 仅用于本地 DynamoDB。
 
 ## 生产 Lambda 热更(发布流程的服务端步骤)
 
@@ -48,6 +48,6 @@ powershell -File installer\billing_server\update_lambda.ps1 -BuildOnly
 
 注意:
 
-- 仅用于日常代码热更;首部署或 `deploy/template.yaml` 变更走 `aws cloudformation deploy`(模板注释有 drift 红线:表/函数只经模板)。
+- 仅用于日常代码热更;首部署或 `deploy/template.yaml` 变更走 `aws cloudformation deploy`。生产表 `redimo` 为外部既有资源,模板只授权访问、不创建或管理表生命周期。
 - 需要 AWS CLI 且有 Lambda 写权限的凭据。
 - 热更的是计费/鉴权/账户/审计与在线去字幕中转;在线链路已改 TOS 直传协议(客户端直传对象存储,服务端只做预签名/扣点/轮询算子),Lambda 无 worker 也能闭环。

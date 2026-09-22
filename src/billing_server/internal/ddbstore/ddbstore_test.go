@@ -220,6 +220,32 @@ func TestCardAndMachineLifecycle(t *testing.T) {
 	}
 }
 
+func TestAllocateBatch(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+
+	first, err := st.AllocateBatch(ctx, "")
+	if err != nil || first != "1" {
+		t.Fatalf("first batch: %q %v", first, err)
+	}
+	second, err := st.AllocateBatch(ctx, "")
+	if err != nil || second != "2" {
+		t.Fatalf("second batch: %q %v", second, err)
+	}
+	explicit, err := st.AllocateBatch(ctx, "5")
+	if err != nil || explicit != "5" {
+		t.Fatalf("explicit batch: %q %v", explicit, err)
+	}
+	named, err := st.AllocateBatch(ctx, "channel-a")
+	if err != nil || named != "channel-a" {
+		t.Fatalf("named batch: %q %v", named, err)
+	}
+	next, err := st.AllocateBatch(ctx, "")
+	if err != nil || next != "6" {
+		t.Fatalf("next batch: %q %v", next, err)
+	}
+}
+
 func TestConcurrentDebitConsistency(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
