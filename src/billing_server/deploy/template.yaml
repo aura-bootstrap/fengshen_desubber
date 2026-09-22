@@ -76,7 +76,7 @@ Resources:
       Handler: bootstrap
       CodeUri: ../dist/function.zip   # 交叉编译 cmd/lambda → bootstrap 后打成 function.zip(仅含 bootstrap)
       MemorySize: 256
-      Timeout: 10
+      Timeout: 30   # submit 阶段 Lambda→北京 TOS 跨境 Range 探测 + LAS 提交,10s 不够
       Environment:
         Variables:
           TABLE_REDIMO: !Ref DesubRedimoTable

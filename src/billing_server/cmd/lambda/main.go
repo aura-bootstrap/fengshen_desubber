@@ -17,6 +17,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
@@ -51,9 +52,13 @@ func main() {
 		if err != nil {
 			log.Fatalf("tos: %v", err)
 		}
-		if err := tosUp.EnsureInputLifecycle(ctx, 1); err != nil {
-			log.Printf("tos lifecycle: %v", err) // 不阻断:即时 Delete 仍在,仅失孤儿兜底
+		// 生命周期设置走公网(Lambda→北京 TOS 跨境),不超时会把 10s init 预算耗尽导致 502;
+		// 4s 兜底,超时就跳过——即时 Delete 仍在,仅失孤儿对象兜底
+		lcCtx, lcCancel := context.WithTimeout(ctx, 4*time.Second)
+		if err := tosUp.EnsureInputLifecycle(lcCtx, 1); err != nil {
+			log.Printf("tos lifecycle: %v", err)
 		}
+		lcCancel()
 		lasCli := las.New(os.Getenv("LAS_BASE_URL"), os.Getenv("LAS_API_KEY"),
 			os.Getenv("LAS_OPERATOR_ID"), os.Getenv("LAS_OPERATOR_VERSION"))
 		reg = provider.NewRegistry("las")

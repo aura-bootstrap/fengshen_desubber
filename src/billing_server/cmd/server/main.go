@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"fengshen-desubber/billing_server/internal/config"
 	"fengshen-desubber/billing_server/internal/ddbstore"
@@ -49,9 +50,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("tos: %v", err)
 	}
-	if err := tosUp.EnsureInputLifecycle(ctx0, 1); err != nil {
-		log.Printf("tos lifecycle: %v", err) // 不阻断:即时 Delete 仍在,仅失孤儿兜底
+	// 生命周期设置不阻断启动,但须限超时,避免 TOS 网络不可达时卡死启动流程
+	lcCtx, lcCancel := context.WithTimeout(ctx0, 10*time.Second)
+	if err := tosUp.EnsureInputLifecycle(lcCtx, 1); err != nil {
+		log.Printf("tos lifecycle: %v", err)
 	}
+	lcCancel()
 	lasCli := las.New(cfg.LAS.BaseURL, cfg.LAS.APIKey, cfg.LAS.OperatorID, cfg.LAS.OperatorVersion)
 
 	// 平台注册表：当前仅火山 LAS 一家（TOS 直传 + LAS 算子），注册为 "las" 并设为默认。
