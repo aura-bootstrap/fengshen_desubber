@@ -12,7 +12,7 @@ import 'theme.dart';
 import 'window_frame.dart';
 
 /// 应用版本号(侧栏展示;发版时与 pubspec version 同步)。
-const kAppVersion = '1.0.0';
+const kAppVersion = '1.0.1';
 
 /// 管理版标识(三端统一命名:开发版/用户版/管理版)。
 const kAppEdition = '管理版';

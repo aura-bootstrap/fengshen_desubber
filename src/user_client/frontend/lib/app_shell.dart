@@ -17,7 +17,7 @@ class NavItem {
 
 /// 应用版本号(侧栏与状态栏共用;发版时与 installer/user_client/setup.iss 的
 /// MyAppVersion 同步)。
-const kAppVersion = '1.0.0';
+const kAppVersion = '1.0.1';
 
 /// 用户版标识(标题栏徽章/侧栏,与管理版区分)。
 const kAppEdition = '用户版';
