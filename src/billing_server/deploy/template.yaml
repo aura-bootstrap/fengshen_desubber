@@ -29,6 +29,18 @@ Parameters:
     NoEcho: true
     MinLength: 32
     Description: 卡密 HMAC 胡椒(泄露=可伪造卡密;轮换使全部未核销卡失效)
+  TosAK:
+    Type: String
+    NoEcho: true
+    Description: 火山 TOS Access Key(las 平台上传侧;真值存 SSM /fengshen-desubber/tos-ak)
+  TosSK:
+    Type: String
+    NoEcho: true
+    Description: 火山 TOS Secret Key(真值存 SSM /fengshen-desubber/tos-sk)
+  LasAPIKey:
+    Type: String
+    NoEcho: true
+    Description: 火山 LAS 算子 API Key(真值存 SSM /fengshen-desubber/las-api-key)
   AdminWebOrigin:
     Type: String
     Default: '*'
@@ -71,6 +83,16 @@ Resources:
           CARD_PEPPER: !Ref CardPepper
           SESSION_KEY: !Ref SessionKey
           ADMIN_ROOT_PASSWORD: !Ref AdminRootPassword
+          # las 平台(火山 TOS+LAS):双机密非空即注册,在线建单不再 503(无 worker,云端阶段不推进)
+          TOS_ENDPOINT: tos-cn-beijing.volces.com
+          TOS_REGION: cn-beijing
+          TOS_BUCKET: jy-subtitle-20260908
+          TOS_AK: !Ref TosAK
+          TOS_SK: !Ref TosSK
+          LAS_BASE_URL: https://operator.las.cn-beijing.volces.com
+          LAS_API_KEY: !Ref LasAPIKey
+          LAS_OPERATOR_ID: las_subtitle_erase
+          LAS_OPERATOR_VERSION: v1
       # 仅用 Lambda Function URL 暴露公网 HTTPS;AuthType NONE = 应用层自行鉴权(admin 会话/卡密信封)。
       FunctionUrlConfig:
         AuthType: NONE
