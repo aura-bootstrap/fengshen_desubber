@@ -40,14 +40,18 @@ type RepairConfig struct {
 
 type EnhanceConfig struct {
 	ProPainter       bool `json:"propainter"`
-	PPMaskDilation   int  `json:"pp_mask_dilation"`
-	PPTightDilate    int  `json:"pp_tight_dilate"`
-	PPRaftIter       int  `json:"pp_raft_iter"`
-	PPNeighborLength int  `json:"pp_neighbor_length"`
-	PPConcurrency    int  `json:"pp_concurrency"`
-	SAM2             bool `json:"sam2"`
-	FaceRestore      bool `json:"face_restore"`
-	VLMQC            bool `json:"vlm_qc"`
+	// Painter 生成式旁车选择:""|propainter=默认 propainter_infer.py;
+	// diffueraser / wanvace 换对应旁车脚本(权重路径走 DIFFUERASER_HOME /
+	// WANVACE_HOME 环境变量,随引擎进程环境透传给子进程)。
+	Painter          string `json:"painter"`
+	PPMaskDilation   int    `json:"pp_mask_dilation"`
+	PPTightDilate    int    `json:"pp_tight_dilate"`
+	PPRaftIter       int    `json:"pp_raft_iter"`
+	PPNeighborLength int    `json:"pp_neighbor_length"`
+	PPConcurrency    int    `json:"pp_concurrency"`
+	SAM2             bool   `json:"sam2"`
+	FaceRestore      bool   `json:"face_restore"`
+	VLMQC            bool   `json:"vlm_qc"`
 }
 
 type EncodeConfig struct {
@@ -164,6 +168,11 @@ func (c *Config) validate() []fieldErr {
 	case "", "motion", "propainter":
 	default:
 		bad("repair.force_engine", "仅支持 空|motion|propainter")
+	}
+	switch c.Enhance.Painter {
+	case "", "propainter", "diffueraser", "wanvace":
+	default:
+		bad("enhance.painter", "仅支持 空|propainter|diffueraser|wanvace")
 	}
 	if c.Enhance.PPConcurrency < 1 || c.Enhance.PPConcurrency > 8 {
 		bad("enhance.pp_concurrency", "须在 1..8")

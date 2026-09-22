@@ -63,6 +63,14 @@ func (c *Config) args() []string {
 			"--pp-neighbor-length", strconv.Itoa(c.Enhance.PPNeighborLength),
 			"--pp-concurrency", strconv.Itoa(c.Enhance.PPConcurrency),
 		)
+		// 生成式旁车选择:空/propainter 用 desub 默认脚本,其余显式指定
+		// (脚本路径相对安装目录,runLocal 已把 cwd 锚到 exeDir)。
+		switch c.Enhance.Painter {
+		case "diffueraser":
+			out = append(out, "--propainter-script", "scripts/diffueraser_infer.py")
+		case "wanvace":
+			out = append(out, "--propainter-script", "scripts/wanvace_infer.py")
+		}
 	}
 	if c.Enhance.SAM2 {
 		out = append(out, "--sam2")

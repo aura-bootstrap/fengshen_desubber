@@ -14,27 +14,36 @@ Object? getPath(Map<String, dynamic> cfg, String path) {
 
 /// 开发版引擎选择(创建/重跑任务选一个;映射到配置键,随任务快照固化)。
 /// 在线引擎走计费服务云端管线,需先在弹窗内激活卡密。
+/// diffueraser/wanvace 与 propainter 共用生成式管线(temporal+强制路由),
+/// 靠 enhance.painter 键换旁车脚本区分。
 const devEngineOptions = <String, String>{
   'temporal': '时域迁移 temporal(邻帧真实像素,快)',
   'delogo': '空间修补 delogo(单帧内修补)',
   'propainter': 'ProPainter 生成式(复杂遮挡,需 GPU)',
+  'diffueraser': 'DiffuEraser 扩散(画质最佳,最慢,需 GPU)',
+  'wanvace': 'Wan-VACE 视频扩散(实验性,需 GPU)',
   'online': '在线去字幕 online(云端·按分钟扣点)',
 };
 
-/// 从配置快照反推引擎选择(在线 > propainter 强制路由 > delogo > 默认 temporal)。
+/// 从配置快照反推引擎选择(在线 > 生成式旁车(按 enhance.painter 细分) > delogo > 默认 temporal)。
 String engineOfConfig(Map<String, dynamic> cfg) {
   final online = cfg['online'];
   if (online is Map && online['enabled'] == true) return 'online';
   final repair = cfg['repair'];
+  final enhance = cfg['enhance'];
   final engine = repair is Map ? repair['engine'] : null;
   final force = repair is Map ? repair['force_engine'] : null;
-  if (force == 'propainter') return 'propainter';
+  if (force == 'propainter') {
+    final painter = enhance is Map ? enhance['painter'] : null;
+    if (painter == 'diffueraser' || painter == 'wanvace') return '$painter';
+    return 'propainter';
+  }
   if (engine == 'delogo') return 'delogo';
   return 'temporal';
 }
 
-/// 深拷贝配置并按引擎选择覆盖 repair/enhance/online 键(propainter 走时域管线+强制路由;
-/// online 只置 online.enabled,保留 online.server 等其余键)。
+/// 深拷贝配置并按引擎选择覆盖 repair/enhance/online 键(生成式三档走时域管线+强制路由,
+/// 由 enhance.painter 选旁车脚本;online 只置 online.enabled,保留 online.server 等其余键)。
 Map<String, dynamic> configWithEngine(Map<String, dynamic> cfg, String engine) {
   final next = (jsonDecode(jsonEncode(cfg)) as Map).cast<String, dynamic>();
   final repair =
@@ -50,10 +59,11 @@ Map<String, dynamic> configWithEngine(Map<String, dynamic> cfg, String engine) {
     case 'delogo':
       repair['engine'] = 'delogo';
       repair['force_engine'] = '';
-    case 'propainter':
+    case 'propainter' || 'diffueraser' || 'wanvace':
       repair['engine'] = 'temporal';
       repair['force_engine'] = 'propainter';
       enhance['propainter'] = true;
+      enhance['painter'] = engine == 'propainter' ? '' : engine;
     default:
       repair['engine'] = 'temporal';
       repair['force_engine'] = 'motion';
@@ -232,6 +242,15 @@ final configPages = <ConfigPage>[
     FieldGroup('ProPainter', '生成式修复旁车(高风险事件)', [
       FieldDef('enhance.propainter', '启用 ProPainter', FieldKind.bool,
           hint: '需要本机 Python 环境、ProPainter 依赖与 GPU'),
+      FieldDef('enhance.painter', '生成式旁车', FieldKind.dropdown,
+          options: ['', 'propainter', 'diffueraser', 'wanvace'],
+          optionLabels: {
+            '': '默认 (propainter)',
+            'propainter': 'ProPainter',
+            'diffueraser': 'DiffuEraser 扩散',
+            'wanvace': 'Wan-VACE(实验性)',
+          },
+          hint: '换生成式旁车脚本;权重路径走 DIFFUERASER_HOME/WANVACE_HOME 环境变量'),
       FieldDef('enhance.pp_mask_dilation', '掩码膨胀(px)', FieldKind.integer,
           hint: '验证值 8:去描边晕染'),
       FieldDef('enhance.pp_tight_dilate', '笔画级掩码膨胀(px)', FieldKind.integer,

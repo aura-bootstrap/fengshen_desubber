@@ -53,6 +53,8 @@ func (o *DockerOptions) defaults() {
 
 // Params is the per-task flag snapshot stored with the task row.
 type Params struct {
+	// Engine 修补引擎:空=temporal 默认;temporal|delogo 直传 --engine。
+	Engine        string `json:"engine"`
 	Propainter    bool   `json:"propainter"`
 	Grain         bool   `json:"grain"`
 	OCR           bool   `json:"ocr"`
@@ -60,8 +62,10 @@ type Params struct {
 	ForceEngine   string `json:"force_engine"`
 	PPConcurrency int    `json:"pp_concurrency"`
 	DiffuEraser   bool   `json:"diffueraser"`
-	SAM2          bool   `json:"sam2"`
-	FaceRestore   bool   `json:"face_restore"`
+	// WanVACE 实验性:换 desub:cu124-wan 镜像 + wanvace_infer.py 旁车。
+	WanVACE     bool `json:"wanvace"`
+	SAM2        bool `json:"sam2"`
+	FaceRestore bool `json:"face_restore"`
 	// 在线去字幕:true 时不启 docker,走计费服务云端管线(见 online.go)。
 	Online   bool   `json:"online"`
 	Provider string `json:"provider"` // 云端引擎选择,可空(透传 X-Provider 头)
@@ -70,6 +74,9 @@ type Params struct {
 // args converts the snapshot into desub remove flags.
 func (p Params) args() []string {
 	var out []string
+	if p.Engine != "" {
+		out = append(out, "--engine", p.Engine)
+	}
 	if p.Propainter {
 		out = append(out, "--propainter")
 	}
@@ -137,6 +144,16 @@ func Run(ctx context.Context, o DockerOptions, workDir, srcPath, outName, params
 		image = "desub:diffueraser"
 		painterScript = "/src/scripts/diffueraser_infer.py"
 		args = append(args, "-e", "DIFFUERASER_HOME=/work/vendor/DiffuEraser")
+	}
+	if p.WanVACE {
+		image = "desub:cu124-wan"
+		painterScript = "/src/scripts/wanvace_infer.py"
+		args = append(args,
+			"-e", "WANVACE_HOME=/work/vendor/Wan2.1",
+			"-e", "WANVACE_CKPT=/work/vendor/Wan2.1/Wan2.1-VACE-1.3B",
+			// 16GB 卡必须把 T5 文本编码器留 CPU(放 GPU 爆显存)。
+			"-e", "WANVACE_T5_CPU=1",
+		)
 	}
 	if p.SAM2 {
 		args = append(args, "-e", "SAM2_HOME=/work/vendor/sam2")

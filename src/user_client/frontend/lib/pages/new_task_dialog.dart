@@ -28,14 +28,18 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   final nameCtrl = TextEditingController();
   final outCtrl = TextEditingController();
   final crfCtrl = TextEditingController(text: '15');
-  // 修复三件套不在 UI 暴露,底层固定全开(对齐 slice1-pp-grain tag 参数)。
+  // grain/ocr 不在 UI 暴露,底层固定全开(对齐 slice1-pp-grain tag 参数);
+  // propainter 是生成式三档的默认值(temporal/delogo 由 engineParams 置否)。
   static const propainter = true;
   static const grain = true;
   static const ocr = true;
-  // 修复引擎三选一:diffueraser(DiffuEraser 扩散,本地,画质最好,最慢)/
-  // propainter(ProPainter,本地,快)/ online(在线去字幕,云端,按分钟扣点)。
-  // 本地引擎路由只留 painter 档:自动路由会把慢动事件分进 motion 档留残影,
-  // 质量优先于耗时,固定强制(force_engine 对齐 slice1-pp-grain tag 参数)
+  // 修复引擎六选一(创建时固化进任务快照):
+  // diffueraser(DiffuEraser 扩散,本地,画质最好,最慢)/ propainter(ProPainter,本地,快)/
+  // temporal(时域迁移,本地,最快)/ delogo(空间修补,本地,单帧)/
+  // wanvace(Wan-VACE 视频扩散,本地,实验性)/ online(在线去字幕,云端,按分钟扣点)。
+  // 生成式三档(propainter/diffueraser/wanvace)固定强制 force_engine=propainter
+  // 走 painter 档:自动路由会把慢动事件分进 motion 档留残影,质量优先于耗时
+  // (对齐 slice1-pp-grain tag 参数)。
   String engine = 'diffueraser';
   static const forceEngine = 'propainter';
   // SAM2 像素级掩码 + GFPGAN 人脸先验:已验证(v14 管线),质量优先默认开。
@@ -44,6 +48,9 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   static const engineLabels = {
     'diffueraser': 'DiffuEraser 扩散(本地·最佳画质,慢)',
     'propainter': 'ProPainter(本地·快)',
+    'temporal': '时域迁移 temporal(本地·最快)',
+    'delogo': '空间修补 delogo(本地·单帧修补)',
+    'wanvace': 'Wan-VACE 视频扩散(本地·实验性)',
     'online': '在线去字幕(云端·按分钟扣点)',
   };
   bool runNow = true;
@@ -78,19 +85,7 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
         name: nameCtrl.text.trim(),
         srcPath: src,
         outName: outCtrl.text.trim(),
-        params: {
-          'propainter': propainter,
-          'grain': grain,
-          'ocr': ocr,
-          'crf': int.tryParse(crfCtrl.text) ?? 0,
-          'force_engine': forceEngine,
-          'sam2': sam2,
-          'face_restore': faceRestore,
-          // 向后兼容:本地两档照旧按选择写 diffueraser;选在线引擎时
-          // 额外写 online: true,diffueraser 落为 false。
-          'diffueraser': engine == 'diffueraser',
-          if (engine == 'online') 'online': true,
-        },
+        params: engineParams(),
         runNow: runNow,
       );
       await widget.state.refresh();
@@ -104,6 +99,42 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
         TopToast.show(context, '$e', error: true);
       }
     }
+  }
+
+  /// 按引擎选择生成任务参数快照(六选一互斥,见 engineLabels)。
+  Map<String, dynamic> engineParams() {
+    final p = <String, dynamic>{
+      'grain': grain,
+      'ocr': ocr,
+      'crf': int.tryParse(crfCtrl.text) ?? 0,
+      'sam2': sam2,
+      'face_restore': faceRestore,
+      'propainter': propainter,
+      'force_engine': forceEngine,
+      'diffueraser': false,
+    };
+    switch (engine) {
+      case 'temporal':
+        // 纯时域迁移:不开生成式旁车,强制全部事件走 motion 档
+        // (否则路由把 T3+ 事件分进 painter 档而无旁车可用)。
+        p['engine'] = 'temporal';
+        p['propainter'] = false;
+        p['force_engine'] = 'motion';
+      case 'delogo':
+        p['engine'] = 'delogo';
+        p['propainter'] = false;
+        p['force_engine'] = '';
+      case 'propainter':
+        break; // 生成式默认值即 ProPainter
+      case 'wanvace':
+        p['wanvace'] = true;
+      case 'online':
+        // 在线引擎:本地旗标无意义,runner 见 online 直接走云端管线。
+        p['online'] = true;
+      default: // diffueraser
+        p['diffueraser'] = true;
+    }
+    return p;
   }
 
   @override
