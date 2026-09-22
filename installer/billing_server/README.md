@@ -31,3 +31,23 @@ powershell -File installer\billing_server\deploy.ps1 -BuildOnly
 - 免管理员:走当前用户的 Docker Desktop,无需 sudo/服务注册。
 - 多实例:用不同 `-Container` / `-Port` / `-Config` 即可并存(如沙盒 18180、生产 18080)。
 - 表初始化:DynamoDB 表由 `src\billing_server\cmd\mktables` 一次性创建(本地 DDB 容器或 AWS),详见源码注释。
+
+## 生产 Lambda 热更(发布流程的服务端步骤)
+
+生产计费跑在 AWS Lambda `fengshen-desubber`(ap-east-1),不是 Docker。发版时若 `src/billing_server` 有改动,打完客户端安装包后须热更服务端:
+
+```powershell
+# 编译 + 打包 + update-function-code + 探活(未授权 /v1/balance 应回 401)
+powershell -File installer\billing_server\update_lambda.ps1
+
+# 只编译打包自检,不动生产
+powershell -File installer\billing_server\update_lambda.ps1 -BuildOnly
+```
+
+脚本流程:交叉编译 `cmd/lambda`(GOOS=linux GOARCH=arm64)→ 打 `dist\function.zip`(仅 bootstrap)→ `aws lambda update-function-code --publish` → 等待生效并打印 CodeSha256 → 探活 Function URL(现查,不入库)。
+
+注意:
+
+- 仅用于日常代码热更;首部署或 `deploy/template.yaml` 变更走 `aws cloudformation deploy`(模板注释有 drift 红线:表/函数只经模板)。
+- 需要 AWS CLI 且有 Lambda 写权限的凭据。
+- 热更的是计费/鉴权/账户/审计与在线去字幕中转;在线链路已改 TOS 直传协议(客户端直传对象存储,服务端只做预签名/扣点/轮询算子),Lambda 无 worker 也能闭环。
