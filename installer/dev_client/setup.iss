@@ -1,10 +1,10 @@
 ; 峰神·去字幕(开发版)Windows 安装包(Inno Setup 6)—— 开发版 GUI(desub_dev_ui + desub-engine + desub CLI,
 ; 全参数面板可调,本地直连不连服务器;配置 JSON 可拷贝到管理版发布)
 ; 构建: 先组装 release\dev_client\, 再跑本目录 make.ps1
-; 产物: installer\dev_client\output\峰神·去字幕-开发版-v1.0.1-installer.exe
+; 产物: installer\dev_client\output\峰神·去字幕-开发版-v1.0.2-installer.exe
 
 #define MyAppName "峰神·去字幕(开发版)"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "峰神引擎"
 #define MyAppExeName "峰神引擎-字幕去除器-开发版.exe"
 

@@ -1,9 +1,9 @@
 ; 峰神·去字幕 Windows 安装包(Inno Setup 6)—— 用户版(credit 卡密,可选在线云端引擎)
 ; 构建: 先组装 release\user_client\, 再跑本目录 make.ps1
-; 产物: installer\user_client\output\峰神·去字幕-v1.0.1-installer.exe
+; 产物: installer\user_client\output\峰神·去字幕-v1.0.2-installer.exe
 
 #define MyAppName "峰神·去字幕"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "峰神引擎"
 #define MyAppExeName "峰神引擎-字幕去除器-用户版.exe"
 

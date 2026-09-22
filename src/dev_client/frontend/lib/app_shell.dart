@@ -12,7 +12,7 @@ class NavItem {
 }
 
 /// 应用版本号(侧栏与状态栏共用;发版时与 installer/setup.iss 的 MyAppVersion 同步)。
-const kAppVersion = '1.0.1';
+const kAppVersion = '1.0.2';
 
 /// 开发版标识(标题栏/侧栏,与用户版/管理版区分)。
 const kAppEdition = '开发版';

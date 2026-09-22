@@ -1,9 +1,9 @@
 ; 峰神·去字幕(管理版)Windows 安装包(Inno Setup 6)—— 管理端(卡密/审计/交易流水后台,连 billing_server)
 ; 构建: 先组装 release\admin_client\windows\, 再跑本目录 make.ps1
-; 产物: installer\admin_client\output\峰神·去字幕-管理版-v1.0.1-installer.exe
+; 产物: installer\admin_client\output\峰神·去字幕-管理版-v1.0.2-installer.exe
 
 #define MyAppName "峰神·去字幕(管理版)"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "峰神引擎"
 #define MyAppExeName "峰神引擎-字幕去除器-管理版.exe"
 
