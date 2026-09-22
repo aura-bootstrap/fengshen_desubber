@@ -323,7 +323,7 @@ class _Sidebar extends StatelessWidget {
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
-                _SectionLabel('工作区'),
+                _SectionLabel('流程'),
                 for (final item in navWorkspace)
                   _NavTile(
                     item: item,

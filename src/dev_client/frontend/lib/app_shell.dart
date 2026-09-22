@@ -17,7 +17,7 @@ const kAppVersion = '1.0.0';
 /// 开发版标识(标题栏/侧栏,与用户版/管理版区分)。
 const kAppEdition = '开发版';
 
-/// 工作区:任务/运行。
+/// 流程:任务/运行。
 const navWorkspace = [
   NavItem('tasks', '任务', Icons.task_alt),
   NavItem('run', '运行', Icons.play_circle_outline),
@@ -226,7 +226,7 @@ class _Sidebar extends StatelessWidget {
           child: ListView(
             padding: EdgeInsets.zero,
             children: [
-              _SectionLabel('工作区'),
+              _SectionLabel('流程'),
               for (final item in navWorkspace)
                 _NavTile(
                     item: item,
