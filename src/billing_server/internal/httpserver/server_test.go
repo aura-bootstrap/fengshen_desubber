@@ -254,6 +254,58 @@ func TestFullFlowSuccess(t *testing.T) {
 	}
 }
 
+// 空注册表(Lambda 形态):建单必须 503 且不扣点,否则任务永远排队吞点。
+func TestCreateTaskRejectedWithoutProvider(t *testing.T) {
+	dir := t.TempDir()
+	testutil.FreshTable(t)
+	st, err := ddbstore.NewFromEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.EnsureRoot(context.Background(), testRootPassword); err != nil {
+		t.Fatal(err)
+	}
+	srcDir := filepath.Join(dir, "src")
+	os.MkdirAll(srcDir, 0o755)
+	e := &env{st: st, srcDir: srcDir, resultDir: filepath.Join(dir, "result"), machine: testMachine}
+	e.srv = httptest.NewServer(New(st, srcDir, provider.NewRegistry(""), []byte("test-session-key")).Handler())
+	t.Cleanup(e.srv.Close)
+
+	e.adminTok = e.login(t, "root", testRootPassword)
+	code, b := e.do(t, "POST", "/v1/admin/users", e.adminTok, map[string]any{"name": "alice"})
+	if code != 201 {
+		t.Fatalf("create user: %d %s", code, b)
+	}
+	var u struct {
+		UserID int64  `json:"user_id"`
+		Token  string `json:"token"`
+	}
+	json.Unmarshal(b, &u)
+	e.userID, e.userTok = u.UserID, u.Token
+	code, b = e.doMachine(t, "POST", "/v1/activate", e.userTok, e.machine, nil)
+	if code != 200 {
+		t.Fatalf("activate: %d %s", code, b)
+	}
+	code, b = e.do(t, "POST", "/v1/admin/credits", e.adminTok,
+		map[string]any{"user_id": e.userID, "amount": 5})
+	if code != 200 {
+		t.Fatalf("grant: %d %s", code, b)
+	}
+
+	code, b = e.submitVideo(t, 30)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("empty registry should reject with 503, got %d %s", code, b)
+	}
+	_, b = e.do(t, "GET", "/v1/balance", e.userTok, nil)
+	var bal struct {
+		Credits int64 `json:"credits"`
+	}
+	json.Unmarshal(b, &bal)
+	if bal.Credits != 5 {
+		t.Fatalf("no debit expected, got %d", bal.Credits)
+	}
+}
+
 func TestFailureRefunds(t *testing.T) {
 	e := setup(t, &fakeOperator{fail: true})
 

@@ -294,6 +294,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "unknown_provider")
 		return
 	}
+	// 注册表无此平台(Lambda 形态不注册平台/不起 worker)时,建单只会扣点
+	// 且任务永远排队无人处理,必须在读 body/扣点之前拒绝。
+	if _, ok := s.reg.Get(providerName); !ok {
+		writeErr(w, http.StatusServiceUnavailable, "在线任务暂未部署(服务端无算子平台)")
+		return
+	}
 
 	taskID := uuid.NewString()
 	srcPath := filepath.Join(s.srcDir, taskID+ext)
