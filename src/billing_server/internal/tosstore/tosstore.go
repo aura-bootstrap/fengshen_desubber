@@ -42,3 +42,13 @@ func (s *Store) UploadAndPresign(ctx context.Context, localPath, key string, exp
 	}
 	return out.SignedUrl, nil
 }
+
+// Delete 删除 TOS 对象（任务终态后清理输入视频等临时对象）。
+func (s *Store) Delete(ctx context.Context, key string) error {
+	if _, err := s.client.DeleteObjectV2(ctx, &tos.DeleteObjectV2Input{
+		Bucket: s.bucket, Key: key,
+	}); err != nil {
+		return fmt.Errorf("tos delete: %w", err)
+	}
+	return nil
+}

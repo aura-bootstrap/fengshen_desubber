@@ -58,6 +58,13 @@ func (w *Worker) fail(ctx context.Context, t *ddbstore.Task, err error) {
 	}
 }
 
+// cleanupTOS 任务终态后删除 TOS 上的临时输入视频;失败仅记日志不影响任务结果。
+func (w *Worker) cleanupTOS(ctx context.Context, p provider.Provider, key, taskID string) {
+	if err := p.Uploader.Delete(ctx, key); err != nil {
+		log.Printf("task %s delete tos %s: %v", taskID, key, err)
+	}
+}
+
 func (w *Worker) process(ctx context.Context, t *ddbstore.Task) {
 	log.Printf("task %s: processing (%ds, cost %d)", t.ID, t.DurationSec, t.Cost)
 
@@ -85,6 +92,7 @@ func (w *Worker) process(ctx context.Context, t *ddbstore.Task) {
 		return p.Operator.Submit(ctx, url, t.ID)
 	})
 	if err != nil {
+		w.cleanupTOS(ctx, p, key, t.ID)
 		w.fail(ctx, t, fmt.Errorf("las submit: %w", err))
 		return
 	}
@@ -104,20 +112,24 @@ func (w *Worker) process(ctx context.Context, t *ddbstore.Task) {
 				if _, err := retry(ctx, 3, func() (string, error) {
 					return "", p.Operator.Download(ctx, videoURL, dst)
 				}); err != nil {
+					w.cleanupTOS(ctx, p, key, t.ID)
 					w.fail(ctx, t, fmt.Errorf("result download: %w", err))
 					return
 				}
 				if err := w.st.CompleteTask(ctx, t.ID, dst); err != nil {
 					log.Printf("task %s complete: %v", t.ID, err)
 				}
+				w.cleanupTOS(ctx, p, key, t.ID)
 				log.Printf("task %s: completed", t.ID)
 				return
 			case "FAILED":
+				w.cleanupTOS(ctx, p, key, t.ID)
 				w.fail(ctx, t, fmt.Errorf("las failed: %s", errMsg))
 				return
 			}
 		}
 		if time.Now().After(deadline) {
+			w.cleanupTOS(ctx, p, key, t.ID)
 			w.fail(ctx, t, fmt.Errorf("poll timeout after %s", w.PollMax))
 			return
 		}

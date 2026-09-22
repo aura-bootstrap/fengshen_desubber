@@ -31,6 +31,8 @@ func (fakeUploader) UploadAndPresign(ctx context.Context, localPath, key string,
 	return "https://tos.fake/" + key, nil
 }
 
+func (fakeUploader) Delete(ctx context.Context, key string) error { return nil }
+
 type fakeOperator struct {
 	fail      bool
 	resultBin []byte

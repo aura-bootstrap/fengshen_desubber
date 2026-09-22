@@ -5,9 +5,11 @@ package provider
 
 import "context"
 
-// Uploader 对象存储上传抽象：上传本地文件并返回预签名 GET URL。
+// Uploader 对象存储上传抽象：上传本地文件并返回预签名 GET URL；
+// Delete 删除临时对象（任务终态后清理输入视频）。
 type Uploader interface {
 	UploadAndPresign(ctx context.Context, localPath, key string, expiresSec int64) (string, error)
+	Delete(ctx context.Context, key string) error
 }
 
 // Operator 去字幕算子抽象：提交/轮询/下载三段式。
