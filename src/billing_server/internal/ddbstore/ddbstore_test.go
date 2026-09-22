@@ -293,41 +293,40 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("balance before submit: %d", m.Balance)
 	}
 
-	// submit 扣点置 processing;重复 submit 拒
-	if _, err := st.SubmitTaskWithDebit(ctx, t1.ID, 50, 1); err != nil {
-		t.Fatalf("SubmitTaskWithDebit: %v", err)
+	// submit 仅置 processing，LAS 完成后才按权威时长结算；重复 submit 拒绝。
+	if balance, err := st.StartTask(ctx, t1.ID); err != nil || balance != 10 {
+		t.Fatalf("StartTask: balance=%d err=%v", balance, err)
 	}
 	m, _ = st.GetMachine(ctx, machine)
-	if m.Balance != 9 {
-		t.Fatalf("balance after debit: %d", m.Balance)
+	if m.Balance != 10 {
+		t.Fatalf("balance before settlement: %d", m.Balance)
 	}
-	if _, err := st.SubmitTaskWithDebit(ctx, t1.ID, 50, 1); !errors.Is(err, ErrTaskState) {
+	if _, err := st.StartTask(ctx, t1.ID); !errors.Is(err, ErrTaskState) {
 		t.Fatalf("re-submit should be ErrTaskState: %v", err)
 	}
 	got, _ := st.GetTask(ctx, t1.ID)
-	if got.Status != TaskProcessing || got.Provider != "las" || got.DurationSec != 50 || got.Cost != 1 {
+	if got.Status != TaskProcessing || got.Provider != "las" || got.DurationSec != 0 || got.Cost != 0 {
 		t.Fatalf("processing task: %+v", got)
 	}
 
-	// 完成:记录算子侧成片 URL
 	if err := st.SetLasTaskID(ctx, t1.ID, "las-123"); err != nil {
 		t.Fatalf("SetLasTaskID: %v", err)
 	}
-	if err := st.CompleteTask(ctx, t1.ID, "https://tos/out.mp4"); err != nil {
-		t.Fatalf("CompleteTask: %v", err)
+	if balance, err := st.FinalizeTaskWithDebit(ctx, t1.ID, 50, 1, "https://tos/out.mp4"); err != nil || balance != 9 {
+		t.Fatalf("FinalizeTaskWithDebit: balance=%d err=%v", balance, err)
 	}
 	done, _ := st.GetTask(ctx, t1.ID)
-	if done.Status != TaskCompleted || done.ResultURL != "https://tos/out.mp4" || done.LasTaskID != "las-123" {
+	if done.Status != TaskCompleted || done.ResultURL != "https://tos/out.mp4" || done.LasTaskID != "las-123" || done.Cost != 1 {
 		t.Fatalf("completed: %+v", done)
 	}
 
-	// processing 失败退款且幂等
+	// processing 失败时尚未扣点，无需退款且保持幂等。
 	t2 := &Task{ID: "task-" + code[:8] + "-2", CardID: c.ID, SrcKey: "input/b.mp4"}
 	if err := st.CreateUploadingTask(ctx, t2); err != nil {
 		t.Fatalf("CreateUploadingTask t2: %v", err)
 	}
-	if _, err := st.SubmitTaskWithDebit(ctx, t2.ID, 50, 2); err != nil {
-		t.Fatalf("SubmitTaskWithDebit t2: %v", err)
+	if _, err := st.StartTask(ctx, t2.ID); err != nil {
+		t.Fatalf("StartTask t2: %v", err)
 	}
 	if err := st.FailTaskWithRefund(ctx, t2.ID, "boom"); err != nil {
 		t.Fatalf("FailTaskWithRefund: %v", err)
@@ -336,8 +335,8 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("FailTaskWithRefund idempotent: %v", err)
 	}
 	m, _ = st.GetMachine(ctx, machine)
-	if m.Balance != 9 { // 10 -1 -2 +2
-		t.Fatalf("balance after refund: %d", m.Balance)
+	if m.Balance != 9 {
+		t.Fatalf("balance after unbilled failure: %d", m.Balance)
 	}
 	ft, _ := st.GetTask(ctx, t2.ID)
 	if ft.Status != TaskFailed || ft.Error != "boom" {

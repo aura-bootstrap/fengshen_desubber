@@ -90,8 +90,8 @@ func (c *Client) Submit(ctx context.Context, videoURL, clientToken string) (stri
 	return out.Metadata.TaskID, nil
 }
 
-// Poll 返回状态（COMPLETED/FAILED/RUNNING/...）、结果 URL 与错误信息。
-func (c *Client) Poll(ctx context.Context, taskID string) (status, videoURL, errMsg string, err error) {
+// Poll 返回状态（COMPLETED/FAILED/RUNNING/...）、结果 URL、错误信息与权威视频时长。
+func (c *Client) Poll(ctx context.Context, taskID string) (status, videoURL, errMsg string, duration float64, err error) {
 	var out pollResp
 	err = c.doJSON(ctx, "/api/v1/poll", map[string]any{
 		"operator_id":      c.operatorID,
@@ -99,11 +99,11 @@ func (c *Client) Poll(ctx context.Context, taskID string) (status, videoURL, err
 		"task_id":          taskID,
 	}, &out)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", 0, err
 	}
 	status = out.Metadata.TaskStatus
 	if status == "" {
 		status = out.TaskStatus
 	}
-	return status, out.Data.VideoURL, out.Metadata.ErrorMsg, nil
+	return status, out.Data.VideoURL, out.Metadata.ErrorMsg, out.Data.Duration, nil
 }

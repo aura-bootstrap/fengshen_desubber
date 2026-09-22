@@ -87,25 +87,27 @@ func (f *fakeTOS) deletedKeys() []string {
 }
 
 type fakeOperator struct {
-	fail      bool
-	resultURL string
+	fail        bool
+	resultURL   string
+	durationSec float64
 }
 
 func (f *fakeOperator) Submit(ctx context.Context, videoURL, clientToken string) (string, error) {
 	return "las-task-1", nil
 }
 
-func (f *fakeOperator) Poll(ctx context.Context, taskID string) (string, string, string, error) {
+func (f *fakeOperator) Poll(ctx context.Context, taskID string) (string, string, string, float64, error) {
 	if f.fail {
-		return "FAILED", "", "subtitle too complex", nil
+		return "FAILED", "", "subtitle too complex", 0, nil
 	}
-	return "COMPLETED", f.resultURL, "", nil
+	return "COMPLETED", f.resultURL, "", f.durationSec, nil
 }
 
 type env struct {
 	st       *ddbstore.Store
 	srv      *httptest.Server
 	tos      *fakeTOS
+	op       *fakeOperator
 	adminTok string // root 会话令牌
 	userTok  string // 卡面（用户凭证）
 	userID   int64  // 卡 id
@@ -124,10 +126,17 @@ func setup(t *testing.T, op provider.Operator) *env {
 	}
 	// 平台注册表:fakeTOS 上传 + 注入算子,注册为 "las" 默认平台
 	tos := newFakeTOS(t)
+	fake, ok := op.(*fakeOperator)
+	if op == nil {
+		fake = &fakeOperator{}
+		op = fake
+	} else if !ok {
+		fake = nil
+	}
 	reg := provider.NewRegistry("las")
 	reg.Register(provider.Provider{Name: "las", Uploader: tos, Operator: op})
 
-	e := &env{st: st, tos: tos, machine: testMachine}
+	e := &env{st: st, tos: tos, op: fake, machine: testMachine}
 	e.srv = httptest.NewServer(New(st, reg, []byte("test-session-key")).Handler())
 	t.Cleanup(e.srv.Close)
 
@@ -228,6 +237,9 @@ func (e *env) createTask(t *testing.T) (int, []byte) {
 // taskFlow 直传协议三步:建单→PUT 原片到"对象存储"→submit;返回 submit 的状态码/响应体。
 func (e *env) taskFlow(t *testing.T, durationSec int64) (string, int, []byte) {
 	t.Helper()
+	if e.op != nil {
+		e.op.durationSec = float64(durationSec)
+	}
 	code, b := e.createTask(t)
 	if code != 201 {
 		t.Fatalf("create: %d %s", code, b)
@@ -293,11 +305,14 @@ func TestFullFlowSuccess(t *testing.T) {
 		Balance int64 `json:"balance"`
 	}
 	json.Unmarshal(b, &sub)
-	if sub.Cost != 2 || sub.Balance != 3 {
-		t.Fatalf("cost/balance wrong: %+v", sub)
+	if sub.Cost != 0 || sub.Balance != 5 {
+		t.Fatalf("submit should defer settlement: %+v", sub)
 	}
 
-	waitStatus(t, e, taskID, "completed")
+	completed := waitStatus(t, e, taskID, "completed")
+	if completed["cost"] != float64(2) || completed["duration_sec"] != float64(65) {
+		t.Fatalf("settlement wrong: %v", completed)
+	}
 
 	// TOS 临时输入视频已即时清理
 	if del := e.tos.deletedKeys(); len(del) != 1 || del[0] != "input/"+taskID+".mp4" {
@@ -415,9 +430,13 @@ func TestFailureRefunds(t *testing.T) {
 
 func TestInsufficientBalance(t *testing.T) {
 	e := setup(t, nil)
-	_, code, b := e.taskFlow(t, 3600) // 60 credits > 5
-	if code != http.StatusPaymentRequired {
-		t.Fatalf("want 402, got %d %s", code, b)
+	taskID, code, b := e.taskFlow(t, 3600) // 60 credits > 5
+	if code != http.StatusOK {
+		t.Fatalf("submit should queue before settlement, got %d %s", code, b)
+	}
+	failed := waitStatus(t, e, taskID, "failed")
+	if !strings.Contains(failed["error"].(string), "insufficient balance") {
+		t.Fatalf("settlement failure missing: %v", failed)
 	}
 }
 

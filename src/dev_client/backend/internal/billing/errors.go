@@ -30,6 +30,37 @@ func (e *InsufficientBalanceError) Error() string {
 	return fmt.Sprintf("余额不足: 需要 %d 点,当前 %d 点", e.Need, e.Have)
 }
 
+type ObjectStoreError struct {
+	Status    int
+	Code      string
+	Msg       string
+	RequestID string
+	Cause     error
+}
+
+func (e *ObjectStoreError) Error() string {
+	if e.Cause != nil {
+		return "对象存储上传失败: " + e.Cause.Error()
+	}
+	detail := e.Code
+	if e.Msg != "" {
+		if detail != "" {
+			detail += ": "
+		}
+		detail += e.Msg
+	}
+	if e.RequestID != "" {
+		if detail != "" {
+			detail += ", "
+		}
+		detail += "请求ID " + e.RequestID
+	}
+	if detail != "" {
+		return fmt.Sprintf("对象存储上传失败(%d): %s", e.Status, detail)
+	}
+	return fmt.Sprintf("对象存储上传失败(%d)", e.Status)
+}
+
 // APIError 未归类的服务端错误(带 HTTP 状态与服务端错误码/文案)。
 type APIError struct {
 	Status int
@@ -62,6 +93,10 @@ func Message(err error) string {
 		return "卡密尚未激活,请先激活"
 	case errors.Is(err, ErrTaskNotReady):
 		return "云端任务尚未完成,暂不能下载"
+	}
+	var storeErr *ObjectStoreError
+	if errors.As(err, &storeErr) {
+		return storeErr.Error()
 	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {

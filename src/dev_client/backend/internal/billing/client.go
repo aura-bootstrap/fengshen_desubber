@@ -7,6 +7,7 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -201,12 +202,12 @@ func (c *Client) CreateTask(ctx context.Context, filePath, provider string, onPr
 	putReq.Header.Set("Content-Type", "application/octet-stream")
 	putResp, err := c.long.Do(putReq)
 	if err != nil {
-		return nil, fmt.Errorf("直传对象存储失败: %v", err)
+		return nil, &ObjectStoreError{Cause: err}
 	}
 	defer putResp.Body.Close()
 	if putResp.StatusCode != http.StatusOK && putResp.StatusCode != http.StatusCreated &&
 		putResp.StatusCode != http.StatusNoContent {
-		return nil, fmt.Errorf("直传对象存储失败: http %d", putResp.StatusCode)
+		return nil, decodeObjectStoreErr(putResp)
 	}
 
 	// ③ submit:服务端探测时长->扣点->提交算子。
@@ -300,6 +301,32 @@ func firstErr(errs ...error) error {
 		}
 	}
 	return nil
+}
+
+type objectStoreErrBody struct {
+	Code      string `json:"Code" xml:"Code"`
+	Message   string `json:"Message" xml:"Message"`
+	RequestID string `json:"RequestId" xml:"RequestId"`
+}
+
+func decodeObjectStoreErr(resp *http.Response) error {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	var body objectStoreErrBody
+	if json.Unmarshal(raw, &body) != nil {
+		xml.Unmarshal(raw, &body)
+	}
+	if body.RequestID == "" {
+		body.RequestID = resp.Header.Get("X-Tos-Request-Id")
+	}
+	if body.Message == "" && body.Code == "" {
+		body.Message = strings.TrimSpace(string(raw))
+	}
+	return &ObjectStoreError{
+		Status:    resp.StatusCode,
+		Code:      body.Code,
+		Msg:       body.Message,
+		RequestID: body.RequestID,
+	}
 }
 
 // errBody 服务端错误体(容错解析:code/error/message/need/have 都可选)。

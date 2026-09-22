@@ -55,9 +55,13 @@ func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName, provider 
 	if err != nil {
 		return fmt.Errorf("云端建单失败: %s", billing.Message(err))
 	}
-	events <- Event{Type: "log", Msg: fmt.Sprintf(
-		"云端任务 %s 已创建(时长 %.1fs,扣点 %d,余额 %d)",
-		created.TaskID, created.DurationSec, created.Cost, created.Balance)}
+	if created.Cost == 0 {
+		events <- Event{Type: "log", Msg: fmt.Sprintf("云端任务 %s 已提交，处理完成后按实际时长结算", created.TaskID)}
+	} else {
+		events <- Event{Type: "log", Msg: fmt.Sprintf(
+			"云端任务 %s 已创建(时长 %.1fs,扣点 %d,余额 %d)",
+			created.TaskID, created.DurationSec, created.Cost, created.Balance)}
+	}
 	// 顺带刷新本地缓存余额(status 接口远端不可达时兜底显示)。
 	kf.Credits = created.Balance
 	_ = cardkey.SaveKeyFile(keyDir, kf)

@@ -16,7 +16,7 @@ type Uploader interface {
 // Operator 去字幕算子抽象：提交/轮询两段式(结果由算子侧 URL 直下,服务端不中转)。
 type Operator interface {
 	Submit(ctx context.Context, videoURL, clientToken string) (string, error)
-	Poll(ctx context.Context, taskID string) (status, videoURL, errMsg string, err error)
+	Poll(ctx context.Context, taskID string) (status, videoURL, errMsg string, duration float64, err error)
 }
 
 // Provider 一套平台能力：名字 + 上传 + 算子。

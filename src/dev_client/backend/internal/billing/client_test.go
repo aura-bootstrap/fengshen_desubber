@@ -176,6 +176,61 @@ func TestCreateTaskStreamsUpload(t *testing.T) {
 	}
 }
 
+func TestCreateTaskTOSUploadError(t *testing.T) {
+	cases := []struct {
+		name        string
+		contentType string
+		body        string
+	}{
+		{"JSON", "application/json", `{"Code":"InvalidAccessKeyId","Message":"access key does not exist","RequestId":"req-json"}`},
+		{"XML", "application/xml", `<Error><Code>AccessDenied</Code><Message>put denied</Message><RequestId>req-xml</RequestId></Error>`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			video := filepath.Join(dir, "a.mp4")
+			if err := os.WriteFile(video, []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var srv *httptest.Server
+			submitCalled := false
+			srv2, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/v1/tasks":
+					w.WriteHeader(http.StatusCreated)
+					json.NewEncoder(w).Encode(map[string]string{"task_id": "task-1", "upload_url": srv.URL + "/tos/input/task-1.mp4"})
+				case r.URL.Path == "/tos/input/task-1.mp4":
+					w.Header().Set("Content-Type", tc.contentType)
+					w.Header().Set("X-Tos-Request-Id", "req-header")
+					w.WriteHeader(http.StatusForbidden)
+					io.WriteString(w, tc.body)
+				case r.URL.Path == "/v1/tasks/task-1/submit":
+					submitCalled = true
+				default:
+					t.Errorf("意外请求: %s %s", r.Method, r.URL.Path)
+				}
+			})
+			srv = srv2
+
+			_, err := newTestClient(srv).CreateTask(context.Background(), video, "", nil)
+			var storeErr *ObjectStoreError
+			if !errors.As(err, &storeErr) {
+				t.Fatalf("err = %T %v, want *ObjectStoreError", err, err)
+			}
+			if storeErr.Code == "" || storeErr.RequestID == "" {
+				t.Fatalf("对象存储错误信息不完整: %+v", storeErr)
+			}
+			if submitCalled {
+				t.Fatal("上传失败后不应调用 submit")
+			}
+			message := Message(err)
+			if strings.Contains(message, "计费服务不可达") || !strings.Contains(message, storeErr.Code) {
+				t.Fatalf("错误文案分类不正确: %q", message)
+			}
+		})
+	}
+}
+
 func TestCreateTaskInsufficientBalance(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

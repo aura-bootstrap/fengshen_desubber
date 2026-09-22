@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -17,7 +18,6 @@ import (
 	"fengshen-desubber/billing_server/internal/billing"
 	"fengshen-desubber/billing_server/internal/cardkey"
 	"fengshen-desubber/billing_server/internal/ddbstore"
-	"fengshen-desubber/billing_server/internal/probe"
 	"fengshen-desubber/billing_server/internal/provider"
 )
 
@@ -273,8 +273,8 @@ func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	uploadURLExpireSec = 7200               // 预签名 PUT/GET 有效期(客户端直传与算子回源)
-	pollTimeout        = 30 * time.Minute   // processing 超过此时长判超时失败并退款
+	uploadURLExpireSec = 7200             // 预签名 PUT/GET 有效期(客户端直传与算子回源)
+	pollTimeout        = 30 * time.Minute // processing 超过此时长判超时失败并退款
 )
 
 // createTask 建单(不读 body、不扣点):登记 uploading 任务并发预签名 PUT URL,
@@ -326,8 +326,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// submitTask 客户端直传完成后提交:探测时长(经 TOS 预签名 GET Range 读取)->
-// 扣点(uploading→processing)-> 提交算子。算子提交失败即退款并清理 TOS 临时视频。
+// submitTask 客户端直传完成后提交算子。时长与扣点在 LAS 完成后按权威结果结算。
 func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.ownTask(w, r)
 	if !ok {
@@ -347,16 +346,9 @@ func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "presign get: "+err.Error())
 		return
 	}
-	dur, err := probe.DurationSecondsURL(getURL)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "probe duration: "+err.Error())
-		return
-	}
-	cost := billing.Cost(dur)
-	balanceAfter, err := s.st.SubmitTaskWithDebit(r.Context(), t.ID, dur, cost)
+	balance, err := s.st.StartTask(r.Context(), t.ID)
 	if errors.Is(err, ddbstore.ErrInsufficientBalance) {
-		writeErr(w, http.StatusPaymentRequired,
-			fmt.Sprintf("insufficient balance: need %d, have %d", cost, balanceAfter))
+		writeErr(w, http.StatusPaymentRequired, "insufficient balance: need at least 1 credit")
 		return
 	}
 	if errors.Is(err, ddbstore.ErrTaskState) {
@@ -371,7 +363,7 @@ func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.cleanupTOS(r, p, t)
 		if ferr := s.st.FailTaskWithRefund(r.Context(), t.ID, "las submit: "+err.Error()); ferr != nil {
-			log.Printf("task %s refund failed: %v", t.ID, ferr)
+			log.Printf("task %s fail: %v", t.ID, ferr)
 		}
 		writeErr(w, http.StatusBadGateway, "las submit: "+err.Error())
 		return
@@ -380,7 +372,7 @@ func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
 		log.Printf("task %s set las id: %v", t.ID, err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"task_id": t.ID, "duration_sec": dur, "cost": cost, "balance": balanceAfter,
+		"task_id": t.ID, "duration_sec": 0, "cost": 0, "balance": balance,
 	})
 }
 
@@ -423,15 +415,18 @@ func (s *Server) advanceTask(r *http.Request, t *ddbstore.Task) *ddbstore.Task {
 	if !ok {
 		return t // 平台被摘除:保持 processing,待人工处置
 	}
-	status, videoURL, errMsg, err := p.Operator.Poll(r.Context(), t.LasTaskID)
+	status, videoURL, errMsg, duration, err := p.Operator.Poll(r.Context(), t.LasTaskID)
 	if err != nil {
 		log.Printf("task %s poll error: %v", t.ID, err)
 		return t // 算子侧抖动:维持 processing,下一轮再试
 	}
 	switch {
-	case status == "COMPLETED" && videoURL != "":
-		if err := s.st.CompleteTask(r.Context(), t.ID, videoURL); err != nil {
-			log.Printf("task %s complete: %v", t.ID, err)
+	case status == "COMPLETED" && videoURL != "" && duration > 0:
+		dur := int64(math.Ceil(duration))
+		cost := billing.Cost(dur)
+		if _, err := s.st.FinalizeTaskWithDebit(r.Context(), t.ID, dur, cost, videoURL); err != nil &&
+			!errors.Is(err, ddbstore.ErrInsufficientBalance) {
+			log.Printf("task %s settle: %v", t.ID, err)
 		}
 		s.cleanupTOS(r, p, t)
 	case status == "FAILED":
@@ -477,7 +472,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	}
 	url := t.ResultURL
 	if p, pok := s.reg.Get(t.Provider); pok && t.LasTaskID != "" {
-		if status, videoURL, _, err := p.Operator.Poll(r.Context(), t.LasTaskID); err == nil &&
+		if status, videoURL, _, _, err := p.Operator.Poll(r.Context(), t.LasTaskID); err == nil &&
 			status == "COMPLETED" && videoURL != "" {
 			url = videoURL
 		}

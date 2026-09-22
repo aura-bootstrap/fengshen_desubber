@@ -12,6 +12,7 @@ import (
 const (
 	TaskUploading  = "uploading" // 已建单待发 TOS 直传+submit,未扣点
 	TaskProcessing = "processing"
+	TaskSettling   = "settling"
 	TaskCompleted  = "completed"
 	TaskFailed     = "failed"
 )
@@ -101,9 +102,7 @@ func (s *Store) CreateUploadingTask(ctx context.Context, t *Task) error {
 	return nil
 }
 
-// SubmitTaskWithDebit 提交点：uploading→processing 先 CAS 占位（防重复提交），
-// 再机器余额扣费；扣费失败（如余额不足）回滚状态到 uploading，任务可重试。
-func (s *Store) SubmitTaskWithDebit(ctx context.Context, taskID string, durationSec, cost int64) (balanceAfter int64, err error) {
+func (s *Store) StartTask(ctx context.Context, taskID string) (int64, error) {
 	t, err := s.GetTask(ctx, taskID)
 	if err != nil {
 		return 0, err
@@ -111,10 +110,33 @@ func (s *Store) SubmitTaskWithDebit(ctx context.Context, taskID string, duration
 	if t.Status != TaskUploading {
 		return 0, ErrTaskState
 	}
+	m, err := s.GetMachine(ctx, t.MachineHash)
+	if err != nil || m.Balance < 1 {
+		return 0, ErrInsufficientBalance
+	}
+	ok, err := s.casTask(ctx, t, func(n *Task) { n.Status = TaskProcessing })
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, ErrTaskState
+	}
+	return m.Balance, nil
+}
+
+func (s *Store) FinalizeTaskWithDebit(ctx context.Context, taskID string, durationSec, cost int64, resultURL string) (int64, error) {
+	t, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return 0, err
+	}
+	if t.Status != TaskProcessing {
+		return 0, ErrTaskState
+	}
 	ok, err := s.casTask(ctx, t, func(n *Task) {
-		n.Status = TaskProcessing
+		n.Status = TaskSettling
 		n.DurationSec = durationSec
 		n.Cost = cost
+		n.ResultURL = resultURL
 	})
 	if err != nil {
 		return 0, err
@@ -122,14 +144,35 @@ func (s *Store) SubmitTaskWithDebit(ctx context.Context, taskID string, duration
 	if !ok {
 		return 0, ErrTaskState
 	}
-	balanceAfter, err = s.DebitMachine(ctx, t.MachineHash, cost, "debit", t.ID, t.CardID)
+	balanceAfter, err := s.DebitMachine(ctx, t.MachineHash, cost, "debit", t.ID, t.CardID)
 	if err != nil {
-		if fresh, gerr := s.GetTask(ctx, taskID); gerr == nil {
-			if _, rerr := s.casTask(ctx, fresh, func(n *Task) { n.Status = TaskUploading }); rerr != nil {
-				log.Printf("task %s rollback to uploading failed: %v", taskID, rerr)
-			}
+		fresh, getErr := s.GetTask(ctx, taskID)
+		if getErr == nil {
+			_, _ = s.casTask(ctx, fresh, func(n *Task) {
+				if errors.Is(err, ErrInsufficientBalance) {
+					n.Status = TaskFailed
+					n.Error = "insufficient balance at settlement"
+					n.ResultURL = ""
+				} else {
+					n.Status = TaskProcessing
+					n.DurationSec = 0
+					n.Cost = 0
+					n.ResultURL = ""
+				}
+			})
 		}
 		return balanceAfter, err
+	}
+	fresh, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return balanceAfter, err
+	}
+	ok, err = s.casTask(ctx, fresh, func(n *Task) { n.Status = TaskCompleted })
+	if err != nil {
+		return balanceAfter, err
+	}
+	if !ok {
+		return balanceAfter, errors.New("finalize task: cas conflict")
 	}
 	return balanceAfter, nil
 }
