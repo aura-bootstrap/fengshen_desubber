@@ -9,12 +9,11 @@ import (
 	"syscall"
 
 	"fengshen-desubber/billing_server/internal/config"
+	"fengshen-desubber/billing_server/internal/ddbstore"
 	"fengshen-desubber/billing_server/internal/httpserver"
 	"fengshen-desubber/billing_server/internal/las"
-	"fengshen-desubber/billing_server/internal/ddbstore"
 	"fengshen-desubber/billing_server/internal/provider"
 	"fengshen-desubber/billing_server/internal/tosstore"
-	"fengshen-desubber/billing_server/internal/worker"
 )
 
 func main() {
@@ -25,11 +24,6 @@ func main() {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
-	}
-	for _, d := range []string{cfg.SrcDir, cfg.ResultDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			log.Fatalf("mkdir %s: %v", d, err)
-		}
 	}
 
 	ctx0 := context.Background()
@@ -55,19 +49,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("tos: %v", err)
 	}
+	if err := tosUp.EnsureInputLifecycle(ctx0, 1); err != nil {
+		log.Printf("tos lifecycle: %v", err) // 不阻断:即时 Delete 仍在,仅失孤儿兜底
+	}
 	lasCli := las.New(cfg.LAS.BaseURL, cfg.LAS.APIKey, cfg.LAS.OperatorID, cfg.LAS.OperatorVersion)
 
-	// 平台注册表：当前仅火山 LAS 一家（TOS 上传 + LAS 算子），注册为 "las" 并设为默认。
+	// 平台注册表：当前仅火山 LAS 一家（TOS 直传 + LAS 算子），注册为 "las" 并设为默认。
 	reg := provider.NewRegistry("las")
 	reg.Register(provider.Provider{Name: "las", Uploader: tosUp, Operator: lasCli})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	w := worker.New(st, reg, cfg.ResultDir)
-	go w.Run(ctx)
-
-	srv := &http.Server{Addr: cfg.Listen, Handler: httpserver.New(st, cfg.SrcDir, reg, []byte(sessionKey)).Handler()}
+	srv := &http.Server{Addr: cfg.Listen, Handler: httpserver.New(st, reg, []byte(sessionKey)).Handler()}
 	go func() {
 		<-ctx.Done()
 		srv.Shutdown(context.Background())

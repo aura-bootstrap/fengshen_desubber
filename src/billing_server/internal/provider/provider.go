@@ -5,18 +5,18 @@ package provider
 
 import "context"
 
-// Uploader 对象存储上传抽象：上传本地文件并返回预签名 GET URL；
-// Delete 删除临时对象（任务终态后清理输入视频）。
+// Uploader 对象存储抽象:预签名直传(PUT 给客户端上传原片、GET 给算子/探测读取)
+// 与临时对象删除(任务终态/生命周期清理输入视频)。
 type Uploader interface {
-	UploadAndPresign(ctx context.Context, localPath, key string, expiresSec int64) (string, error)
+	PresignPut(ctx context.Context, key string, expiresSec int64) (string, error)
+	PresignGet(ctx context.Context, key string, expiresSec int64) (string, error)
 	Delete(ctx context.Context, key string) error
 }
 
-// Operator 去字幕算子抽象：提交/轮询/下载三段式。
+// Operator 去字幕算子抽象：提交/轮询两段式(结果由算子侧 URL 直下,服务端不中转)。
 type Operator interface {
 	Submit(ctx context.Context, videoURL, clientToken string) (string, error)
 	Poll(ctx context.Context, taskID string) (status, videoURL, errMsg string, err error)
-	Download(ctx context.Context, url, dstPath string) error
 }
 
 // Provider 一套平台能力：名字 + 上传 + 算子。

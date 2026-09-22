@@ -267,7 +267,7 @@ func TestConcurrentDebitConsistency(t *testing.T) {
 	}
 }
 
-func TestTaskQueueFlow(t *testing.T) {
+func TestTaskLifecycle(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	code, _ := cardkey.Generate()
@@ -280,54 +280,54 @@ func TestTaskQueueFlow(t *testing.T) {
 		t.Fatalf("EnsureRedeemed: %v", err)
 	}
 
-	t1 := &Task{ID: "task-" + code[:8] + "-1", CardID: c.ID, Provider: "las", SrcPath: "/tmp/a.mp4", DurationSec: 50, Cost: 1}
-	if _, err := st.CreateTaskWithDebit(ctx, t1); err != nil {
-		t.Fatalf("CreateTaskWithDebit: %v", err)
+	// 建单不扣点:uploading 态,余额不动
+	t1 := &Task{ID: "task-" + code[:8] + "-1", CardID: c.ID, Provider: "las", SrcKey: "input/a.mp4"}
+	if err := st.CreateUploadingTask(ctx, t1); err != nil {
+		t.Fatalf("CreateUploadingTask: %v", err)
+	}
+	if t1.Status != TaskUploading || t1.MachineHash != machine {
+		t.Fatalf("uploading task: %+v", t1)
 	}
 	m, _ := st.GetMachine(ctx, machine)
+	if m.Balance != 10 {
+		t.Fatalf("balance before submit: %d", m.Balance)
+	}
+
+	// submit 扣点置 processing;重复 submit 拒
+	if _, err := st.SubmitTaskWithDebit(ctx, t1.ID, 50, 1); err != nil {
+		t.Fatalf("SubmitTaskWithDebit: %v", err)
+	}
+	m, _ = st.GetMachine(ctx, machine)
 	if m.Balance != 9 {
 		t.Fatalf("balance after debit: %d", m.Balance)
 	}
-	if t1.MachineHash != machine {
-		t.Fatalf("task machine: %+v", t1)
+	if _, err := st.SubmitTaskWithDebit(ctx, t1.ID, 50, 1); !errors.Is(err, ErrTaskState) {
+		t.Fatalf("re-submit should be ErrTaskState: %v", err)
+	}
+	got, _ := st.GetTask(ctx, t1.ID)
+	if got.Status != TaskProcessing || got.Provider != "las" || got.DurationSec != 50 || got.Cost != 1 {
+		t.Fatalf("processing task: %+v", got)
 	}
 
-	got, err := st.NextQueued(ctx)
-	if err != nil || got == nil || got.ID != t1.ID || got.Status != TaskProcessing {
-		t.Fatalf("NextQueued: %v %+v", err, got)
-	}
-	if got.Provider != "las" {
-		t.Fatalf("provider roundtrip: %+v", got)
-	}
-	// 队列已空
-	empty, err := st.NextQueued(ctx)
-	if err != nil || empty != nil {
-		t.Fatalf("NextQueued empty: %v %+v", err, empty)
-	}
-	// ResetProcessing 排回
-	if err := st.ResetProcessing(ctx); err != nil {
-		t.Fatalf("ResetProcessing: %v", err)
-	}
-	got, err = st.NextQueued(ctx)
-	if err != nil || got == nil || got.ID != t1.ID {
-		t.Fatalf("NextQueued after reset: %v %+v", err, got)
-	}
-	// 完成
+	// 完成:记录算子侧成片 URL
 	if err := st.SetLasTaskID(ctx, t1.ID, "las-123"); err != nil {
 		t.Fatalf("SetLasTaskID: %v", err)
 	}
-	if err := st.CompleteTask(ctx, t1.ID, "/tmp/out.mp4"); err != nil {
+	if err := st.CompleteTask(ctx, t1.ID, "https://tos/out.mp4"); err != nil {
 		t.Fatalf("CompleteTask: %v", err)
 	}
 	done, _ := st.GetTask(ctx, t1.ID)
-	if done.Status != TaskCompleted || done.ResultPath != "/tmp/out.mp4" || done.LasTaskID != "las-123" {
+	if done.Status != TaskCompleted || done.ResultURL != "https://tos/out.mp4" || done.LasTaskID != "las-123" {
 		t.Fatalf("completed: %+v", done)
 	}
 
-	// 失败退款幂等
-	t2 := &Task{ID: "task-" + code[:8] + "-2", CardID: c.ID, SrcPath: "/tmp/b.mp4", DurationSec: 50, Cost: 2}
-	if _, err := st.CreateTaskWithDebit(ctx, t2); err != nil {
-		t.Fatalf("CreateTaskWithDebit t2: %v", err)
+	// processing 失败退款且幂等
+	t2 := &Task{ID: "task-" + code[:8] + "-2", CardID: c.ID, SrcKey: "input/b.mp4"}
+	if err := st.CreateUploadingTask(ctx, t2); err != nil {
+		t.Fatalf("CreateUploadingTask t2: %v", err)
+	}
+	if _, err := st.SubmitTaskWithDebit(ctx, t2.ID, 50, 2); err != nil {
+		t.Fatalf("SubmitTaskWithDebit t2: %v", err)
 	}
 	if err := st.FailTaskWithRefund(ctx, t2.ID, "boom"); err != nil {
 		t.Fatalf("FailTaskWithRefund: %v", err)

@@ -2,6 +2,7 @@ package probe
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/abema/go-mp4"
@@ -14,8 +15,21 @@ func DurationSeconds(path string) (int64, error) {
 		return 0, err
 	}
 	defer f.Close()
+	return probeDuration(f)
+}
 
-	info, err := mp4.Probe(f)
+// DurationSecondsURL 经 HTTP Range 请求读取远端 mp4/mov 的真实播放时长（秒），
+// 不整文件下载（moov 在尾部时只回源尾部片段）。rs 须支持 Range。
+func DurationSecondsURL(url string) (int64, error) {
+	rs, err := newHTTPReadSeeker(url)
+	if err != nil {
+		return 0, err
+	}
+	return probeDuration(rs)
+}
+
+func probeDuration(rs io.ReadSeeker) (int64, error) {
+	info, err := mp4.Probe(rs)
 	if err != nil {
 		return 0, fmt.Errorf("not a valid mp4/mov: %w", err)
 	}

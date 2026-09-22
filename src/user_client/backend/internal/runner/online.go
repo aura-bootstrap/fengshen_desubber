@@ -1,8 +1,9 @@
 package runner
 
 // 在线去字幕执行链路(Online=true 时替代 docker 本地管线):
-// 读 cardkey.json -> 流式上传原片建云端任务 -> 每 15s 轮询状态(上限 6 小时,
-// 长视频) -> completed 后流式下载成片到本任务约定的输出位置(workDir/outName)。
+// 读 cardkey.json -> 建单拿预签名 URL 直传原片到 TOS -> submit 提交算子 ->
+// 每 15s 轮询状态(上限 6 小时,长视频) -> completed 后下载成片(302 到算子侧地址)
+// 到本任务约定的输出位置(workDir/outName)。
 // 各阶段复用既有 SSE 事件: stage(upload/cloud/download) + log(含已等待时长)。
 
 import (

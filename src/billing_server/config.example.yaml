@@ -2,8 +2,6 @@
 # 启动：server /path/to/config.yaml（Docker 内默认 /etc/desubber/config.yaml，env CONFIG 覆盖）
 
 listen: ":18080"        # HTTP 监听地址
-src_dir: "./data/src"   # 源视频暂存目录
-result_dir: "./data/result" # 结果视频目录
 root_password: "change-me-root-password" # 超级管理员 root 初始密码（仅首次种入；改密走管理端，重置须删 root 行重启）
 session_key: ""        # 会话令牌 HMAC 密钥，空=回落 card_pepper
 card_pepper: "change-me-card-pepper" # 卡哈希 HMAC 密钥（env CARD_PEPPER 优先）

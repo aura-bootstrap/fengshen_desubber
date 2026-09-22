@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -107,27 +106,4 @@ func (c *Client) Poll(ctx context.Context, taskID string) (status, videoURL, err
 		status = out.TaskStatus
 	}
 	return status, out.Data.VideoURL, out.Metadata.ErrorMsg, nil
-}
-
-// Download 将结果视频写入本地文件。
-func (c *Client) Download(ctx context.Context, url, dstPath string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download http %d", resp.StatusCode)
-	}
-	f, err := os.Create(dstPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
 }

@@ -20,16 +20,19 @@ const (
 )
 
 // newFakeServer 按计费契约起 httptest 假服务,返回 server 与请求记录。
-// handler 命中路由后自行写响应;公共头校验统一在这里做。
+// handler 命中路由后自行写响应;公共头校验统一在这里做(/tos/ 直传路径免验,
+// 预签名 URL 自带凭证、不带计费鉴权头)。
 func newFakeServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *[]*http.Request) {
 	t.Helper()
 	var seen []*http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer "+testCard {
-			t.Errorf("Authorization 头错误: %q", got)
-		}
-		if got := r.Header.Get("X-Machine-Hash"); got != testHash {
-			t.Errorf("X-Machine-Hash 头错误: %q", got)
+		if !strings.HasPrefix(r.URL.Path, "/tos/") {
+			if got := r.Header.Get("Authorization"); got != "Bearer "+testCard {
+				t.Errorf("Authorization 头错误: %q", got)
+			}
+			if got := r.Header.Get("X-Machine-Hash"); got != testHash {
+				t.Errorf("X-Machine-Hash 头错误: %q", got)
+			}
 		}
 		seen = append(seen, r)
 		handler(w, r)
@@ -121,33 +124,44 @@ func TestBalanceErrorMapping(t *testing.T) {
 }
 
 func TestCreateTaskStreamsUpload(t *testing.T) {
-	// 造一个本地视频文件,验证客户端流式上传且头齐。
+	// 造一个本地视频文件,验证三段式:建单(头齐、无 body)→ 直传 TOS(流式)→ submit。
 	dir := t.TempDir()
 	video := filepath.Join(dir, "样片 01.mp4")
 	payload := strings.Repeat("fake-mp4-bytes;", 4096)
 	if err := os.WriteFile(video, []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/tasks" || r.Method != http.MethodPost {
+	var srv *httptest.Server
+	srv2, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/tasks" && r.Method == http.MethodPost:
+			if got := r.Header.Get("X-Video-Filename"); got != "样片 01.mp4" {
+				t.Errorf("X-Video-Filename = %q", got)
+			}
+			if got := r.Header.Get("X-Provider"); got != "diffueraser" {
+				t.Errorf("X-Provider = %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(201)
+			json.NewEncoder(w).Encode(map[string]any{
+				"task_id": "task-1", "upload_url": srv.URL + "/tos/input/task-1.mp4", "expires_in": 7200,
+			})
+		case r.URL.Path == "/tos/input/task-1.mp4" && r.Method == http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			if string(body) != payload {
+				t.Errorf("直传体不一致(收到 %d 字节)", len(body))
+			}
+			w.WriteHeader(200)
+		case r.URL.Path == "/v1/tasks/task-1/submit" && r.Method == http.MethodPost:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"task_id": "task-1", "duration_sec": 12.5, "cost": 25, "balance": 95,
+			})
+		default:
 			t.Errorf("意外请求: %s %s", r.Method, r.URL.Path)
 		}
-		if got := r.Header.Get("X-Video-Filename"); got != "样片 01.mp4" {
-			t.Errorf("X-Video-Filename = %q", got)
-		}
-		if got := r.Header.Get("X-Provider"); got != "diffueraser" {
-			t.Errorf("X-Provider = %q", got)
-		}
-		body, _ := io.ReadAll(r.Body)
-		if string(body) != payload {
-			t.Errorf("上传体不一致(收到 %d 字节)", len(body))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(201)
-		json.NewEncoder(w).Encode(map[string]any{
-			"task_id": "task-1", "duration_sec": 12.5, "cost": 25, "balance": 95,
-		})
 	})
+	srv = srv2
 	var lastDone, totalSeen int64 = -1, -1
 	resp, err := newTestClient(srv).CreateTask(context.Background(), video, "diffueraser",
 		func(done, total int64) { lastDone, totalSeen = done, total })
@@ -217,12 +231,17 @@ func TestGetTaskStatus(t *testing.T) {
 func TestDownloadStreamsToDisk(t *testing.T) {
 	payload := strings.Repeat("mp4-result;", 8192)
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/tasks/task-1/download" {
+		switch r.URL.Path {
+		case "/v1/tasks/task-1/download":
+			// 现协议:download 302 到算子侧成片地址,客户端须自动跟随
+			http.Redirect(w, r, "/result.mp4", http.StatusFound)
+		case "/result.mp4":
+			w.Header().Set("Content-Type", "video/mp4")
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			io.WriteString(w, payload)
+		default:
 			t.Errorf("意外路径: %s", r.URL.Path)
 		}
-		w.Header().Set("Content-Type", "video/mp4")
-		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
-		io.WriteString(w, payload)
 	})
 	dst := filepath.Join(t.TempDir(), "out.mp4")
 	var lastDone, totalSeen int64 = -1, -1

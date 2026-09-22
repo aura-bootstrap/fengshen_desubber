@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"log"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -33,19 +33,20 @@ type principal struct {
 
 type Server struct {
 	st         *ddbstore.Store
-	srcDir     string
 	reg        *provider.Registry
 	sessionKey []byte
 }
 
-func New(st *ddbstore.Store, srcDir string, reg *provider.Registry, sessionKey []byte) *Server {
-	return &Server{st: st, srcDir: srcDir, reg: reg, sessionKey: sessionKey}
+func New(st *ddbstore.Store, reg *provider.Registry, sessionKey []byte) *Server {
+	return &Server{st: st, reg: reg, sessionKey: sessionKey}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// 冻结协议：路径/方法/请求响应字段不变
+	// 任务:TOS 直传协议——建单发预签名 PUT、客户端直传、submit 探测扣点提交算子、
+	// GET 轮询内联推进算子状态、download 302 到算子侧成片地址。
 	mux.Handle("POST /v1/tasks", s.auth("", s.createTask))
+	mux.Handle("POST /v1/tasks/{id}/submit", s.auth("", s.submitTask))
 	mux.Handle("GET /v1/tasks/{id}", s.auth("", s.getTask))
 	mux.Handle("GET /v1/tasks/{id}/download", s.auth("", s.download))
 	mux.Handle("GET /v1/balance", s.auth("", s.balance))
@@ -271,8 +272,13 @@ func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-const maxUpload = 2 << 30 // 2GB
+const (
+	uploadURLExpireSec = 7200               // 预签名 PUT/GET 有效期(客户端直传与算子回源)
+	pollTimeout        = 30 * time.Minute   // processing 超过此时长判超时失败并退款
+)
 
+// createTask 建单(不读 body、不扣点):登记 uploading 任务并发预签名 PUT URL,
+// 客户端直传原片到 TOS 后调 submit。上传失败/永不提交的对象由桶生命周期自动过期。
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	c := cardOf(r)
 	if c == nil {
@@ -286,7 +292,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 平台路由：X-Provider 头缺省走默认平台，未知名拒绝。
+	// 平台路由:X-Provider 头缺省走默认平台,未知名拒绝。
 	providerName := r.Header.Get("X-Provider")
 	if providerName == "" {
 		providerName = s.reg.DefaultName()
@@ -294,59 +300,87 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "unknown_provider")
 		return
 	}
-	// 注册表无此平台(Lambda 形态不注册平台/不起 worker)时,建单只会扣点
-	// 且任务永远排队无人处理,必须在读 body/扣点之前拒绝。
-	if _, ok := s.reg.Get(providerName); !ok {
+	// 注册表无此平台(Lambda 形态未配置 TOS/LAS env)时,建单只会产生无人处理的
+	// 孤儿任务,必须在登记之前拒绝。
+	p, ok := s.reg.Get(providerName)
+	if !ok {
 		writeErr(w, http.StatusServiceUnavailable, "在线任务暂未部署(服务端无算子平台)")
 		return
 	}
 
 	taskID := uuid.NewString()
-	srcPath := filepath.Join(s.srcDir, taskID+ext)
-	f, err := os.Create(srcPath)
-	if err != nil {
+	srcKey := fmt.Sprintf("input/%s%s", taskID, ext)
+	t := &ddbstore.Task{ID: taskID, CardID: c.ID, Provider: providerName, SrcKey: srcKey}
+	if err := s.st.CreateUploadingTask(r.Context(), t); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_, copyErr := io.Copy(f, http.MaxBytesReader(w, r.Body, maxUpload))
-	f.Close()
-	if copyErr != nil {
-		os.Remove(srcPath)
-		writeErr(w, http.StatusBadRequest, "upload failed: "+copyErr.Error())
+	uploadURL, err := p.Uploader.PresignPut(r.Context(), srcKey, uploadURLExpireSec)
+	if err != nil {
+		_ = s.st.FailTaskWithRefund(r.Context(), taskID, "presign put: "+err.Error())
+		writeErr(w, http.StatusBadGateway, "presign put: "+err.Error())
 		return
 	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"task_id": taskID, "upload_url": uploadURL, "expires_in": uploadURLExpireSec,
+	})
+}
 
-	dur, err := probe.DurationSeconds(srcPath)
+// submitTask 客户端直传完成后提交:探测时长(经 TOS 预签名 GET Range 读取)->
+// 扣点(uploading→processing)-> 提交算子。算子提交失败即退款并清理 TOS 临时视频。
+func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.ownTask(w, r)
+	if !ok {
+		return
+	}
+	if t.Status != ddbstore.TaskUploading {
+		writeErr(w, http.StatusConflict, "task not submittable: "+t.Status)
+		return
+	}
+	p, pok := s.reg.Get(t.Provider)
+	if !pok {
+		writeErr(w, http.StatusServiceUnavailable, "在线任务暂未部署(服务端无算子平台)")
+		return
+	}
+	getURL, err := p.Uploader.PresignGet(r.Context(), t.SrcKey, uploadURLExpireSec)
 	if err != nil {
-		os.Remove(srcPath)
+		writeErr(w, http.StatusBadGateway, "presign get: "+err.Error())
+		return
+	}
+	dur, err := probe.DurationSecondsURL(getURL)
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, "probe duration: "+err.Error())
 		return
 	}
 	cost := billing.Cost(dur)
-
-	t := &ddbstore.Task{
-		ID: taskID, CardID: c.ID, Provider: providerName, SrcPath: srcPath,
-		DurationSec: dur, Cost: cost,
-	}
-	balanceAfter, err := s.st.CreateTaskWithDebit(r.Context(), t)
+	balanceAfter, err := s.st.SubmitTaskWithDebit(r.Context(), t.ID, dur, cost)
 	if errors.Is(err, ddbstore.ErrInsufficientBalance) {
-		os.Remove(srcPath)
 		writeErr(w, http.StatusPaymentRequired,
 			fmt.Sprintf("insufficient balance: need %d, have %d", cost, balanceAfter))
 		return
 	}
-	if errors.Is(err, ddbstore.ErrCardRevoked) {
-		os.Remove(srcPath)
-		writeErr(w, http.StatusForbidden, "card revoked")
+	if errors.Is(err, ddbstore.ErrTaskState) {
+		writeErr(w, http.StatusConflict, "task not submittable")
 		return
 	}
 	if err != nil {
-		os.Remove(srcPath)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"task_id": taskID, "duration_sec": dur, "cost": cost, "balance": balanceAfter,
+	lasID, err := p.Operator.Submit(r.Context(), getURL, t.ID)
+	if err != nil {
+		s.cleanupTOS(r, p, t)
+		if ferr := s.st.FailTaskWithRefund(r.Context(), t.ID, "las submit: "+err.Error()); ferr != nil {
+			log.Printf("task %s refund failed: %v", t.ID, ferr)
+		}
+		writeErr(w, http.StatusBadGateway, "las submit: "+err.Error())
+		return
+	}
+	if err := s.st.SetLasTaskID(r.Context(), t.ID, lasID); err != nil {
+		log.Printf("task %s set las id: %v", t.ID, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"task_id": t.ID, "duration_sec": dur, "cost": cost, "balance": balanceAfter,
 	})
 }
 
@@ -358,15 +392,72 @@ func (s *Server) taskVisible(r *http.Request, t *ddbstore.Task) bool {
 	return p.Card != nil && t.CardID == p.Card.ID
 }
 
-func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
+// ownTask 取任务并校验可见性(卡主本人或管理员);不可见一律 404。
+func (s *Server) ownTask(w http.ResponseWriter, r *http.Request) (*ddbstore.Task, bool) {
 	t, err := s.st.GetTask(r.Context(), r.PathValue("id"))
 	if errors.Is(err, ddbstore.ErrNotFound) || (err == nil && !s.taskVisible(r, t)) {
 		writeErr(w, http.StatusNotFound, "task not found")
-		return
+		return nil, false
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+	return t, true
+}
+
+// cleanupTOS 删除任务的 TOS 临时输入视频;失败仅记日志(桶生命周期兜底)。
+func (s *Server) cleanupTOS(r *http.Request, p provider.Provider, t *ddbstore.Task) {
+	if t.SrcKey == "" {
 		return
+	}
+	if err := p.Uploader.Delete(r.Context(), t.SrcKey); err != nil {
+		log.Printf("task %s delete tos %s: %v", t.ID, t.SrcKey, err)
+	}
+}
+
+// advanceTask processing 态内联推进:轮询算子,COMPLETED 记录成片 URL、
+// FAILED/超时退款;两路径均清理 TOS 临时视频。返回最新任务。
+func (s *Server) advanceTask(r *http.Request, t *ddbstore.Task) *ddbstore.Task {
+	p, ok := s.reg.Get(t.Provider)
+	if !ok {
+		return t // 平台被摘除:保持 processing,待人工处置
+	}
+	status, videoURL, errMsg, err := p.Operator.Poll(r.Context(), t.LasTaskID)
+	if err != nil {
+		log.Printf("task %s poll error: %v", t.ID, err)
+		return t // 算子侧抖动:维持 processing,下一轮再试
+	}
+	switch {
+	case status == "COMPLETED" && videoURL != "":
+		if err := s.st.CompleteTask(r.Context(), t.ID, videoURL); err != nil {
+			log.Printf("task %s complete: %v", t.ID, err)
+		}
+		s.cleanupTOS(r, p, t)
+	case status == "FAILED":
+		s.cleanupTOS(r, p, t)
+		if err := s.st.FailTaskWithRefund(r.Context(), t.ID, "las failed: "+errMsg); err != nil {
+			log.Printf("task %s fail: %v", t.ID, err)
+		}
+	case time.Since(time.Unix(t.UpdatedAt, 0)) > pollTimeout:
+		s.cleanupTOS(r, p, t)
+		if err := s.st.FailTaskWithRefund(r.Context(), t.ID, "poll timeout"); err != nil {
+			log.Printf("task %s timeout-fail: %v", t.ID, err)
+		}
+	}
+	if fresh, err := s.st.GetTask(r.Context(), t.ID); err == nil {
+		return fresh
+	}
+	return t
+}
+
+func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.ownTask(w, r)
+	if !ok {
+		return
+	}
+	if t.Status == ddbstore.TaskProcessing && t.LasTaskID != "" {
+		t = s.advanceTask(r, t)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"task_id": t.ID, "status": t.Status, "duration_sec": t.DurationSec,
@@ -374,23 +465,28 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// download 完成态 302 到算子侧成片地址(重新轮询取新 URL 防过期,失败回落库存 URL)。
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
-	t, err := s.st.GetTask(r.Context(), r.PathValue("id"))
-	if errors.Is(err, ddbstore.ErrNotFound) || (err == nil && !s.taskVisible(r, t)) {
-		writeErr(w, http.StatusNotFound, "task not found")
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	t, ok := s.ownTask(w, r)
+	if !ok {
 		return
 	}
 	if t.Status != ddbstore.TaskCompleted {
 		writeErr(w, http.StatusConflict, "task not completed: "+t.Status)
 		return
 	}
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.mp4"`, t.ID))
-	http.ServeFile(w, r, t.ResultPath)
+	url := t.ResultURL
+	if p, pok := s.reg.Get(t.Provider); pok && t.LasTaskID != "" {
+		if status, videoURL, _, err := p.Operator.Poll(r.Context(), t.LasTaskID); err == nil &&
+			status == "COMPLETED" && videoURL != "" {
+			url = videoURL
+		}
+	}
+	if url == "" {
+		writeErr(w, http.StatusBadGateway, "result url unavailable")
+		return
+	}
+	http.Redirect(w, r, url, http.StatusFound)
 }
 
 func (s *Server) balance(w http.ResponseWriter, r *http.Request) {

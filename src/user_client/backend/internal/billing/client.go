@@ -1,6 +1,7 @@
 // Package billing 远端计费服务纯 HTTP 客户端:卡密激活、余额查询、
-// 云端去字幕任务(流式上传视频 -> 轮询状态 -> 流式下载成片)。
-// 统一头: Authorization: Bearer <卡面>, X-Machine-Hash: <hex64>。
+// 云端去字幕任务(建单拿预签名 URL -> 原片直传 TOS -> submit 提交算子 ->
+// 轮询状态 -> 302 到算子侧地址下载成片)。
+// 统一头: Authorization: Bearer <卡面>, X-Machine-Hash: <hex64>(TOS 直传不带)。
 package billing
 
 import (
@@ -48,7 +49,7 @@ type ActivateResp struct {
 	Status      string `json:"status"`
 }
 
-// CreateTaskResp POST /v1/tasks 成功响应(201)。
+// CreateTaskResp 任务提交(submit)成功响应。
 type CreateTaskResp struct {
 	TaskID      string  `json:"task_id"`
 	DurationSec float64 `json:"duration_sec"`
@@ -144,9 +145,10 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// CreateTask 上传本地视频建云端任务(流式,不整读进内存)。
-// provider 非空时带 X-Provider 头;onProgress 非空时回报上传字节进度。
-// 错误: 402 *InsufficientBalanceError。
+// CreateTask TOS 直传三段式:① 建单拿预签名 PUT URL(不读 body)→
+// ② 原片直传 TOS(视频不经过计费服务)→ ③ submit 探测扣点并提交算子。
+// provider 非空时带 X-Provider 头;onProgress 非空时回报直传字节进度。
+// 错误: 402 *InsufficientBalanceError(submit 阶段扣点失败)。
 func (c *Client) CreateTask(ctx context.Context, filePath, provider string, onProgress ProgressFn) (*CreateTaskResp, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -157,21 +159,17 @@ func (c *Client) CreateTask(ctx context.Context, filePath, provider string, onPr
 	if err != nil {
 		return nil, err
 	}
-	body := io.Reader(f)
-	if onProgress != nil {
-		body = &progressReader{r: f, total: st.Size(), fn: onProgress}
-	}
-	req, err := c.newRequest(ctx, http.MethodPost, "/v1/tasks", body)
+
+	// ① 建单:仅文件名/平台头,服务端回预签名 PUT URL。
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/tasks", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.ContentLength = st.Size()
-	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Video-Filename", filepath.Base(filePath))
 	if provider != "" {
 		req.Header.Set("X-Provider", provider)
 	}
-	resp, err := c.long.Do(req)
+	resp, err := c.short.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -179,9 +177,54 @@ func (c *Client) CreateTask(ctx context.Context, filePath, provider string, onPr
 	if resp.StatusCode != http.StatusCreated {
 		return nil, decodeErr(resp)
 	}
-	var out CreateTaskResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	var created struct {
+		TaskID    string `json:"task_id"`
+		UploadURL string `json:"upload_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		return nil, fmt.Errorf("建单响应解析失败: %v", err)
+	}
+	if created.TaskID == "" || created.UploadURL == "" {
+		return nil, fmt.Errorf("建单响应缺 task_id/upload_url")
+	}
+
+	// ② 直传 TOS:预签名 URL 自带凭证,不带计费鉴权头。
+	body := io.Reader(f)
+	if onProgress != nil {
+		body = &progressReader{r: f, total: st.Size(), fn: onProgress}
+	}
+	putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, created.UploadURL, body)
+	if err != nil {
+		return nil, err
+	}
+	putReq.ContentLength = st.Size()
+	putReq.Header.Set("Content-Type", "application/octet-stream")
+	putResp, err := c.long.Do(putReq)
+	if err != nil {
+		return nil, fmt.Errorf("直传对象存储失败: %v", err)
+	}
+	defer putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK && putResp.StatusCode != http.StatusCreated &&
+		putResp.StatusCode != http.StatusNoContent {
+		return nil, fmt.Errorf("直传对象存储失败: http %d", putResp.StatusCode)
+	}
+
+	// ③ submit:服务端探测时长->扣点->提交算子。
+	subReq, err := c.newRequest(ctx, http.MethodPost, "/v1/tasks/"+created.TaskID+"/submit", nil)
+	if err != nil {
+		return nil, err
+	}
+	subResp, err := c.long.Do(subReq) // 长视频探测可能回源两次,放宽到长超时
+	if err != nil {
+		return nil, err
+	}
+	defer subResp.Body.Close()
+	if subResp.StatusCode != http.StatusOK {
+		return nil, decodeErr(subResp)
+	}
+	var out CreateTaskResp
+	if err := json.NewDecoder(subResp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("提交响应解析失败: %v", err)
 	}
 	return &out, nil
 }

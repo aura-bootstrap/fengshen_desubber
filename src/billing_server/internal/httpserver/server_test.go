@@ -4,17 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"fengshen-desubber/billing_server/internal/ddbstore"
 	"fengshen-desubber/billing_server/internal/provider"
 	"fengshen-desubber/billing_server/internal/testutil"
-	"fengshen-desubber/billing_server/internal/worker"
 )
 
 // testMachine 测试用机器码（64 位小写 hex）。
@@ -25,17 +27,68 @@ const testMachine2 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123
 
 const testRootPassword = "root-pass-123"
 
-type fakeUploader struct{}
-
-func (fakeUploader) UploadAndPresign(ctx context.Context, localPath, key string, expires int64) (string, error) {
-	return "https://tos.fake/" + key, nil
+// fakeTOS 内存版对象存储:PUT/GET(Range)走 httptest,Delete 直接记录。
+// 实现 provider.Uploader(预签名=直接拼测试服务 URL)。
+type fakeTOS struct {
+	srv     *httptest.Server
+	mu      sync.Mutex
+	objects map[string][]byte
+	deleted []string
 }
 
-func (fakeUploader) Delete(ctx context.Context, key string) error { return nil }
+func newFakeTOS(t *testing.T) *fakeTOS {
+	f := &fakeTOS{objects: map[string][]byte{}}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/o/")
+		switch r.Method {
+		case http.MethodPut:
+			b, _ := io.ReadAll(r.Body)
+			f.mu.Lock()
+			f.objects[key] = b
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			f.mu.Lock()
+			b, ok := f.objects[key]
+			f.mu.Unlock()
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			http.ServeContent(w, r, key, time.Unix(0, 0), bytes.NewReader(b))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeTOS) PresignPut(ctx context.Context, key string, expires int64) (string, error) {
+	return f.srv.URL + "/o/" + key, nil
+}
+
+func (f *fakeTOS) PresignGet(ctx context.Context, key string, expires int64) (string, error) {
+	return f.srv.URL + "/o/" + key, nil
+}
+
+func (f *fakeTOS) Delete(ctx context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.objects, key)
+	f.deleted = append(f.deleted, key)
+	return nil
+}
+
+func (f *fakeTOS) deletedKeys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.deleted...)
+}
 
 type fakeOperator struct {
 	fail      bool
-	resultBin []byte
+	resultURL string
 }
 
 func (f *fakeOperator) Submit(ctx context.Context, videoURL, clientToken string) (string, error) {
@@ -46,28 +99,22 @@ func (f *fakeOperator) Poll(ctx context.Context, taskID string) (string, string,
 	if f.fail {
 		return "FAILED", "", "subtitle too complex", nil
 	}
-	return "COMPLETED", "https://result.fake/v.mp4", "", nil
-}
-
-func (f *fakeOperator) Download(ctx context.Context, url, dst string) error {
-	return os.WriteFile(dst, f.resultBin, 0o644)
+	return "COMPLETED", f.resultURL, "", nil
 }
 
 type env struct {
-	st        *ddbstore.Store
-	srv       *httptest.Server
-	srcDir    string
-	resultDir string
-	adminTok  string // root 会话令牌
-	userTok   string // 卡面（用户凭证）
-	userID    int64  // 卡 id
-	machine   string // 已激活卡的绑定机器码
+	st       *ddbstore.Store
+	srv      *httptest.Server
+	tos      *fakeTOS
+	adminTok string // root 会话令牌
+	userTok  string // 卡面（用户凭证）
+	userID   int64  // 卡 id
+	machine  string // 已激活卡的绑定机器码
 }
 
 func setup(t *testing.T, op provider.Operator) *env {
 	t.Helper()
-	dir := t.TempDir()
-	testutil.FreshTable(t) // 独立表:共享表会跨轮残留队列任务,worker 会先消费陈旧任务
+	testutil.FreshTable(t) // 独立表:共享表会跨轮残留任务/卡,互相污染
 	st, err := ddbstore.NewFromEnv(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -75,14 +122,13 @@ func setup(t *testing.T, op provider.Operator) *env {
 	if err := st.EnsureRoot(context.Background(), testRootPassword); err != nil {
 		t.Fatal(err)
 	}
-	// 平台注册表：fake 上传 + 注入算子，注册为 "las" 默认平台
+	// 平台注册表:fakeTOS 上传 + 注入算子,注册为 "las" 默认平台
+	tos := newFakeTOS(t)
 	reg := provider.NewRegistry("las")
-	reg.Register(provider.Provider{Name: "las", Uploader: fakeUploader{}, Operator: op})
+	reg.Register(provider.Provider{Name: "las", Uploader: tos, Operator: op})
 
-	e := &env{st: st, srcDir: filepath.Join(dir, "src"), resultDir: filepath.Join(dir, "result"), machine: testMachine}
-	os.MkdirAll(e.srcDir, 0o755)
-	os.MkdirAll(e.resultDir, 0o755)
-	e.srv = httptest.NewServer(New(st, e.srcDir, reg, []byte("test-session-key")).Handler())
+	e := &env{st: st, tos: tos, machine: testMachine}
+	e.srv = httptest.NewServer(New(st, reg, []byte("test-session-key")).Handler())
 	t.Cleanup(e.srv.Close)
 
 	// root 登录拿会话令牌
@@ -110,15 +156,6 @@ func setup(t *testing.T, op provider.Operator) *env {
 		map[string]any{"user_id": e.userID, "amount": 5})
 	if code != 200 {
 		t.Fatalf("grant: %d %s", code, b)
-	}
-
-	// worker 后台跑
-	if op != nil {
-		w := worker.New(st, reg, e.resultDir)
-		w.PollEvery = 10 * time.Millisecond
-		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
-		go w.Run(ctx)
 	}
 	return e
 }
@@ -171,15 +208,10 @@ func (e *env) doMachine(t *testing.T, method, path, token, machine string, body 
 	return resp.StatusCode, buf.Bytes()
 }
 
-func (e *env) submitVideo(t *testing.T, durationSec int64) (int, []byte) {
+// createTask 仅建单(不直传不提交):POST /v1/tasks 拿预签名 PUT URL。
+func (e *env) createTask(t *testing.T) (int, []byte) {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "v.mp4")
-	testutil.WriteTestMP4(t, p, durationSec)
-	data, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/tasks", bytes.NewReader(data))
+	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/tasks", nil)
 	req.Header.Set("Authorization", "Bearer "+e.userTok)
 	req.Header.Set("X-Video-Filename", "v.mp4")
 	req.Header.Set("X-Machine-Hash", e.machine)
@@ -191,6 +223,39 @@ func (e *env) submitVideo(t *testing.T, durationSec int64) (int, []byte) {
 	var buf bytes.Buffer
 	buf.ReadFrom(resp.Body)
 	return resp.StatusCode, buf.Bytes()
+}
+
+// taskFlow 直传协议三步:建单→PUT 原片到"对象存储"→submit;返回 submit 的状态码/响应体。
+func (e *env) taskFlow(t *testing.T, durationSec int64) (string, int, []byte) {
+	t.Helper()
+	code, b := e.createTask(t)
+	if code != 201 {
+		t.Fatalf("create: %d %s", code, b)
+	}
+	var created struct {
+		TaskID    string `json:"task_id"`
+		UploadURL string `json:"upload_url"`
+	}
+	json.Unmarshal(b, &created)
+
+	p := filepath.Join(t.TempDir(), "v.mp4")
+	testutil.WriteTestMP4(t, p, durationSec)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPut, created.UploadURL, bytes.NewReader(data))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("tos put: %d", resp.StatusCode)
+	}
+
+	code, b = e.do(t, "POST", "/v1/tasks/"+created.TaskID+"/submit", e.userTok, nil)
+	return created.TaskID, code, b
 }
 
 func waitStatus(t *testing.T, e *env, taskID, want string) map[string]any {
@@ -213,25 +278,34 @@ func waitStatus(t *testing.T, e *env, taskID, want string) map[string]any {
 
 func TestFullFlowSuccess(t *testing.T) {
 	result := []byte("fake-erase-result")
-	e := setup(t, &fakeOperator{resultBin: result})
+	resultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(result)
+	}))
+	t.Cleanup(resultSrv.Close)
+	e := setup(t, &fakeOperator{resultURL: resultSrv.URL + "/v.mp4"})
 
-	code, b := e.submitVideo(t, 65) // 65s → 2 credits
-	if code != 201 {
+	taskID, code, b := e.taskFlow(t, 65) // 65s → 2 credits
+	if code != 200 {
 		t.Fatalf("submit: %d %s", code, b)
 	}
-	var created struct {
-		TaskID  string `json:"task_id"`
-		Cost    int64  `json:"cost"`
-		Balance int64  `json:"balance"`
+	var sub struct {
+		Cost    int64 `json:"cost"`
+		Balance int64 `json:"balance"`
 	}
-	json.Unmarshal(b, &created)
-	if created.Cost != 2 || created.Balance != 3 {
-		t.Fatalf("cost/balance wrong: %+v", created)
+	json.Unmarshal(b, &sub)
+	if sub.Cost != 2 || sub.Balance != 3 {
+		t.Fatalf("cost/balance wrong: %+v", sub)
 	}
 
-	waitStatus(t, e, created.TaskID, "completed")
+	waitStatus(t, e, taskID, "completed")
 
-	req, _ := http.NewRequest("GET", e.srv.URL+"/v1/tasks/"+created.TaskID+"/download", nil)
+	// TOS 临时输入视频已即时清理
+	if del := e.tos.deletedKeys(); len(del) != 1 || del[0] != "input/"+taskID+".mp4" {
+		t.Fatalf("tos delete = %v", del)
+	}
+
+	// download 302 到算子侧成片地址,http.Client 自动跟随
+	req, _ := http.NewRequest("GET", e.srv.URL+"/v1/tasks/"+taskID+"/download", nil)
 	req.Header.Set("Authorization", "Bearer "+e.userTok)
 	req.Header.Set("X-Machine-Hash", e.machine)
 	resp, err := http.DefaultClient.Do(req)
@@ -256,9 +330,8 @@ func TestFullFlowSuccess(t *testing.T) {
 	}
 }
 
-// 空注册表(Lambda 形态):建单必须 503 且不扣点,否则任务永远排队吞点。
+// 空注册表(Lambda 未配 TOS/LAS env):建单必须 503,否则产生无人处理的孤儿任务。
 func TestCreateTaskRejectedWithoutProvider(t *testing.T) {
-	dir := t.TempDir()
 	testutil.FreshTable(t)
 	st, err := ddbstore.NewFromEnv(context.Background())
 	if err != nil {
@@ -267,10 +340,8 @@ func TestCreateTaskRejectedWithoutProvider(t *testing.T) {
 	if err := st.EnsureRoot(context.Background(), testRootPassword); err != nil {
 		t.Fatal(err)
 	}
-	srcDir := filepath.Join(dir, "src")
-	os.MkdirAll(srcDir, 0o755)
-	e := &env{st: st, srcDir: srcDir, resultDir: filepath.Join(dir, "result"), machine: testMachine}
-	e.srv = httptest.NewServer(New(st, srcDir, provider.NewRegistry(""), []byte("test-session-key")).Handler())
+	e := &env{st: st, machine: testMachine}
+	e.srv = httptest.NewServer(New(st, provider.NewRegistry(""), []byte("test-session-key")).Handler())
 	t.Cleanup(e.srv.Close)
 
 	e.adminTok = e.login(t, "root", testRootPassword)
@@ -294,7 +365,7 @@ func TestCreateTaskRejectedWithoutProvider(t *testing.T) {
 		t.Fatalf("grant: %d %s", code, b)
 	}
 
-	code, b = e.submitVideo(t, 30)
+	code, b = e.createTask(t)
 	if code != http.StatusServiceUnavailable {
 		t.Fatalf("empty registry should reject with 503, got %d %s", code, b)
 	}
@@ -311,18 +382,19 @@ func TestCreateTaskRejectedWithoutProvider(t *testing.T) {
 func TestFailureRefunds(t *testing.T) {
 	e := setup(t, &fakeOperator{fail: true})
 
-	code, b := e.submitVideo(t, 30) // 1 credit
-	if code != 201 {
+	taskID, code, b := e.taskFlow(t, 30) // 1 credit
+	if code != 200 {
 		t.Fatalf("submit: %d %s", code, b)
 	}
-	var created struct {
-		TaskID string `json:"task_id"`
-	}
-	json.Unmarshal(b, &created)
 
-	st := waitStatus(t, e, created.TaskID, "failed")
+	st := waitStatus(t, e, taskID, "failed")
 	if st["error"] == "" {
 		t.Fatalf("failed task should carry error: %v", st)
+	}
+
+	// 失败路径同样清理 TOS 临时视频
+	if del := e.tos.deletedKeys(); len(del) != 1 || del[0] != "input/"+taskID+".mp4" {
+		t.Fatalf("tos delete = %v", del)
 	}
 
 	_, b = e.do(t, "GET", "/v1/balance", e.userTok, nil)
@@ -335,7 +407,7 @@ func TestFailureRefunds(t *testing.T) {
 	}
 
 	// 下载被拒
-	code, _ = e.do(t, "GET", "/v1/tasks/"+created.TaskID+"/download", e.userTok, nil)
+	code, _ = e.do(t, "GET", "/v1/tasks/"+taskID+"/download", e.userTok, nil)
 	if code != http.StatusConflict {
 		t.Fatalf("download of failed task want 409, got %d", code)
 	}
@@ -343,7 +415,7 @@ func TestFailureRefunds(t *testing.T) {
 
 func TestInsufficientBalance(t *testing.T) {
 	e := setup(t, nil)
-	code, b := e.submitVideo(t, 3600) // 60 credits > 5
+	_, code, b := e.taskFlow(t, 3600) // 60 credits > 5
 	if code != http.StatusPaymentRequired {
 		t.Fatalf("want 402, got %d %s", code, b)
 	}
@@ -362,9 +434,9 @@ func TestAuthAndAdminGuard(t *testing.T) {
 		t.Fatalf("want 403, got %d", code)
 	}
 	// 他人任务不可见
-	code, b := e.submitVideo(t, 10)
+	code, b := e.createTask(t)
 	if code != 201 {
-		t.Fatalf("submit: %d %s", code, b)
+		t.Fatalf("create: %d %s", code, b)
 	}
 	var created struct {
 		TaskID string `json:"task_id"`
@@ -665,11 +737,8 @@ func TestActivateFlow(t *testing.T) {
 // TestUnknownProvider X-Provider 未知名 → 400 unknown_provider；缺省落默认平台。
 func TestUnknownProvider(t *testing.T) {
 	e := setup(t, nil)
-	p := filepath.Join(t.TempDir(), "v.mp4")
-	testutil.WriteTestMP4(t, p, 10)
-	data, _ := os.ReadFile(p)
 
-	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/tasks", bytes.NewReader(data))
+	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/tasks", nil)
 	req.Header.Set("Authorization", "Bearer "+e.userTok)
 	req.Header.Set("X-Video-Filename", "v.mp4")
 	req.Header.Set("X-Machine-Hash", e.machine)

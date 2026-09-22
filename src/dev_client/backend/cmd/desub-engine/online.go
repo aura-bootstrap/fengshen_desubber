@@ -1,8 +1,9 @@
 package main
 
 // 在线去字幕执行链路(任务快照 online.enabled=true 时替代本地 desub 管线):
-// 读 cardkey.json -> 流式上传原片建云端任务 -> 每 15s 轮询状态(上限 6 小时,
-// 长视频) -> completed 后流式下载成片到本任务约定的输出位置(workDir/outName)。
+// 读 cardkey.json -> 建单拿预签名 URL 直传原片到 TOS -> submit 提交算子 ->
+// 每 15s 轮询状态(上限 6 小时,长视频) -> completed 后下载成片(302 到算子侧地址)
+// 到本任务约定的输出位置(workDir/outName)。
 // 移植自用户版 internal/runner/online.go;平台选择透传空值走服务端默认平台。
 
 import (

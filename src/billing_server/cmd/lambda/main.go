@@ -3,12 +3,12 @@
 //
 // 与 cmd/server 的差异:
 //   - 无 config.yaml,全部走环境变量:TABLE_REDIMO / CARD_PEPPER / SESSION_KEY(空回落 CARD_PEPPER)/
-//     ADMIN_ROOT_PASSWORD(幂等种入 root,空则跳过);DDB_ENDPOINT 仅本地调试用。
-//   - 不起 worker 常驻协程(Lambda 无调用间后台执行)。
-//   - TOS_AK+LAS_API_KEY 均配置时注册 las 平台(TOS 上传 + LAS 算子),在线建单不再 503;
-//     但无 worker 推进云端阶段,任务会停在排队——火山中转要闭环仍需常驻形态
-//     (installer/billing_server Docker)。另注意 Function URL 请求体上限 6MB,大视频上传会被拒。
-//     卡激活/余额/会话/账户/审计等计费鉴权接口不受影响。
+//     ADMIN_ROOT_PASSWORD(幂等种入 root,空则跳过);TOS_AK+LAS_API_KEY 均配置才注册 las 平台;
+//     DDB_ENDPOINT 仅本地调试用。
+//
+// 在线去字幕为 TOS 直传协议(建单发预签名 PUT→客户端直传→submit 探测扣点提交算子→
+// GET 轮询内联推进算子状态→download 302 到算子侧成片),全程 JSON 小请求、无 worker,
+// Lambda 即可闭环;Function URL 6MB 请求体上限不再受影响(视频不经过 Lambda)。
 //
 // 构建:GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bootstrap ./cmd/lambda
 package main
@@ -51,12 +51,15 @@ func main() {
 		if err != nil {
 			log.Fatalf("tos: %v", err)
 		}
+		if err := tosUp.EnsureInputLifecycle(ctx, 1); err != nil {
+			log.Printf("tos lifecycle: %v", err) // 不阻断:即时 Delete 仍在,仅失孤儿兜底
+		}
 		lasCli := las.New(os.Getenv("LAS_BASE_URL"), os.Getenv("LAS_API_KEY"),
 			os.Getenv("LAS_OPERATOR_ID"), os.Getenv("LAS_OPERATOR_VERSION"))
 		reg = provider.NewRegistry("las")
 		reg.Register(provider.Provider{Name: "las", Uploader: tosUp, Operator: lasCli})
 	}
-	handler := httpserver.New(st, "/tmp/desub-src", reg, []byte(sessionKey)).Handler()
+	handler := httpserver.New(st, reg, []byte(sessionKey)).Handler()
 	// Function URL 事件是 payload v2 结构,必须用 NewV2(New 按 v1 解析会得到空路径,全量 404)
 	lambda.Start(httpadapter.NewV2(handler).ProxyWithContext)
 }

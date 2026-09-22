@@ -51,8 +51,6 @@ const (
 	keyMach     = keyNS + "mach:"    // mach:<machine_hash>
 	keySeq      = keyNS + "seq:"     // seq:<name>
 	keyTask     = keyNS + "task:"    // task:<uuid>
-	keyQueue    = keyNS + "queue:current"
-	keyProc     = keyNS + "proc:current"
 	keyTx       = keyNS + "tx:"      // tx:<card_id>
 	keyRate     = keyNS + "rl:"      // rl:<scope>:<id>:<win>
 	keyRateFail = keyNS + "rl:fail:" // rl:fail:<scope>:<id>
@@ -66,6 +64,7 @@ var (
 	ErrCardRevoked         = errors.New("card revoked")
 	ErrCardRedeemed        = errors.New("card redeemed")
 	ErrDuplicate           = errors.New("duplicate")
+	ErrTaskState           = errors.New("task state conflict")
 )
 
 // Store 持有强一致 redimo 客户端与可注入时钟。Pepper 为卡哈希 HMAC 密钥
