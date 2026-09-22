@@ -32,7 +32,7 @@ class AppState extends ChangeNotifier {
     try {
       cardKey = await client.cardkeyStatus();
     } catch (e) {
-      print('[cardkey] status failed: $e');
+      debugPrint('[cardkey] status failed: $e');
       cardKeyError = '$e';
     }
     cardKeyLoading = false;
@@ -53,9 +53,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> boot(String engineExe) async {
     try {
-      print('[boot] engine exe: $engineExe exists=${File(engineExe).existsSync()}');
+      debugPrint('[boot] engine exe: $engineExe exists=${File(engineExe).existsSync()}');
       await client.start(engineExe);
-      print('[boot] engine ready at ${client.baseUrl}');
+      debugPrint('[boot] engine ready at ${client.baseUrl}');
       engineReady = true;
       await refresh();
       // 侧栏授权卡片常驻,启动即拉一次卡密状态(未激活/失败都会在卡片上呈现)。
@@ -63,7 +63,7 @@ class AppState extends ChangeNotifier {
       _sub = client.events().listen(_onEvent, onError: (_) {});
       notifyListeners();
     } catch (e) {
-      print('[boot] failed: $e');
+      debugPrint('[boot] failed: $e');
       fatalError = '$e';
       notifyListeners();
     }

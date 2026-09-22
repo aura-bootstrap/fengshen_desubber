@@ -429,7 +429,9 @@ func TestFailureRefunds(t *testing.T) {
 }
 
 func TestInsufficientBalance(t *testing.T) {
-	e := setup(t, nil)
+	// resultURL 必须非空:结算只在算子回报 COMPLETED+成片 URL+权威时长后触发,
+	// 空 URL 视为结果未就绪保持 processing(该用例验证的是余额不足→结算失败置 failed)
+	e := setup(t, &fakeOperator{resultURL: "http://unused/v.mp4"})
 	taskID, code, b := e.taskFlow(t, 3600) // 60 credits > 5
 	if code != http.StatusOK {
 		t.Fatalf("submit should queue before settlement, got %d %s", code, b)

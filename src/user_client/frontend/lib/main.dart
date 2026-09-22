@@ -34,7 +34,7 @@ void unawaitedWindow(WindowOptions opts) {
 }
 
 /// 引擎 exe 定位:优先与壳同目录(打包形态),退回源码树 backend/bin(开发形态,
-/// 按 exe 位置 frontend/build/windows/x64/runner/<cfg>/ 上溯 6 级到 user_client/,与 CWD 无关)。
+/// 按 exe 位置 frontend/build/windows/x64/runner/`<cfg>`/ 上溯 6 级到 user_client/,与 CWD 无关)。
 String resolveEngineExe() {
   final exeDir = File(Platform.resolvedExecutable).parent.path;
   final side = File('$exeDir\\desub-engine.exe');
