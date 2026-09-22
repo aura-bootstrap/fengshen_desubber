@@ -39,7 +39,7 @@ type RepairConfig struct {
 }
 
 type EnhanceConfig struct {
-	ProPainter       bool `json:"propainter"`
+	ProPainter bool `json:"propainter"`
 	// Painter 生成式旁车选择:""|propainter=默认 propainter_infer.py;
 	// diffueraser / wanvace 换对应旁车脚本(权重路径走 DIFFUERASER_HOME /
 	// WANVACE_HOME 环境变量,随引擎进程环境透传给子进程)。
@@ -62,6 +62,7 @@ type EncodeConfig struct {
 type OutputConfig struct {
 	Verify       bool    `json:"verify"`        // re-run detection on the output
 	RiskCoverage float64 `json:"risk_coverage"` // high-risk coverage threshold
+	Dir          string  `json:"dir"`           // 任务成功后复制产物到该目录
 }
 
 // OnlineConfig 云端去字幕:enabled 由创建/重跑的引擎选择写入任务快照(替代本地管线);

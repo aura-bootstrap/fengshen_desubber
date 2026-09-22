@@ -130,14 +130,20 @@ class AppState extends ChangeNotifier {
     String name = '',
     required String srcPath,
     String outName = '',
+    String outDir = '',
     String? engine,
     bool runNow = false,
   }) async {
+    final params = engine == null
+        ? (jsonDecode(jsonEncode(config)) as Map).cast<String, dynamic>()
+        : configWithEngine(config, engine);
+    setPath(params, 'encode.crf', 15);
+    setPath(params, 'output.dir', outDir.trim());
     final tk = await client.createTask(
       name: name,
       srcPath: srcPath,
       outName: outName,
-      params: engine == null ? config : configWithEngine(config, engine),
+      params: params,
       runNow: runNow,
     );
     await refreshTasks();

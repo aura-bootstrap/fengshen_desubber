@@ -6,10 +6,9 @@ import '../models.dart';
 import '../responsive.dart';
 import '../theme.dart';
 import '../widgets/cardkey_activate_dialog.dart';
-import '../widgets/param_field.dart';
 import '../widgets/top_toast.dart';
 
-/// 任务页:任务卡片列表 + 新建任务向导(选视频 → 命名 → 创建/立即运行)。
+/// 任务页:任务卡片列表 + 四步新建任务向导。
 class TasksPage extends StatelessWidget {
   final AppState state;
   const TasksPage({super.key, required this.state});
@@ -229,7 +228,7 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-/// 新建任务向导:选视频 + 命名 + 输出名;「创建」或「创建并运行」。
+/// 新建任务向导:① 选择视频 ② 选择输出地址 ③ 选择引擎 ④ 确认开始。
 class NewTaskDialog extends StatefulWidget {
   final AppState state;
   const NewTaskDialog({super.key, required this.state});
@@ -239,8 +238,19 @@ class NewTaskDialog extends StatefulWidget {
 }
 
 class _NewTaskDialogState extends State<NewTaskDialog> {
-  final _name = TextEditingController();
+  static const _stepNames = ['选择视频', '选择输出地址', '选择引擎', '确认开始'];
+  static const _engines = [
+    ('diffueraser', Icons.auto_awesome, 'DiffuEraser 扩散', '本地 · 最佳画质,慢'),
+    ('propainter', Icons.brush, 'ProPainter', '本地 · 画质与速度均衡'),
+    ('temporal', Icons.bolt, '时域迁移', '本地 · 最快'),
+    ('delogo', Icons.blur_on, '空间修补', '本地 · 单帧修补'),
+    ('wanvace', Icons.science, 'Wan-VACE 视频扩散', '本地 · 实验性,很慢'),
+    ('online', Icons.cloud, '在线去字幕', '云端 · 按分钟扣点'),
+  ];
+
+  final _outDir = TextEditingController();
   final _outName = TextEditingController();
+  int _step = 0;
   String _srcPath = '';
   String _engine = 'temporal';
   String? _error;
@@ -254,9 +264,34 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
 
   @override
   void dispose() {
-    _name.dispose();
+    _outDir.dispose();
     _outName.dispose();
     super.dispose();
+  }
+
+  String get _baseName {
+    if (_srcPath.isEmpty) return '';
+    final base = _srcPath.split(RegExp(r'[\\/]')).last;
+    final dot = base.lastIndexOf('.');
+    return dot > 0 ? base.substring(0, dot) : base;
+  }
+
+  String get _engineLabel =>
+      _engines.firstWhere((item) => item.$1 == _engine).$3;
+
+  bool get _canNext => switch (_step) {
+        0 => _srcPath.isNotEmpty,
+        1 => _outDir.text.trim().isNotEmpty && _outName.text.trim().isNotEmpty,
+        2 => true,
+        _ => false,
+      };
+
+  void _next() {
+    if (!_canNext) return;
+    if (_step + 1 == 2 && _engine == 'online') {
+      widget.state.refreshCardKey();
+    }
+    setState(() => _step++);
   }
 
   Future<void> _pickVideo() async {
@@ -266,26 +301,30 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
     if (file == null) return;
     setState(() {
       _srcPath = file.path;
-      final base = file.name.replaceAll(RegExp(r'\.[^.]+$'), '');
-      if (_name.text.trim().isEmpty) _name.text = base;
-      if (_outName.text.trim().isEmpty) _outName.text = '${base}_fixed.mp4';
+      if (_outDir.text.isEmpty) {
+        final normalized = file.path.replaceAll('/', '\\');
+        final index = normalized.lastIndexOf('\\');
+        final dir = index > 0 ? normalized.substring(0, index) : '';
+        _outDir.text = dir.endsWith('\\') ? '$dir去字幕' : '$dir\\去字幕';
+      }
+      if (_outName.text.isEmpty) {
+        final base = file.name.replaceAll(RegExp(r'\.[^.]+$'), '');
+        _outName.text = '${base}_fixed.mp4';
+      }
     });
   }
 
   Future<void> _submit(bool runNow) async {
-    if (_srcPath.isEmpty) {
-      setState(() => _error = '请先选择视频文件');
-      return;
-    }
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       final tk = await widget.state.createTask(
-        name: _name.text.trim(),
+        name: _baseName,
         srcPath: _srcPath,
         outName: _outName.text.trim(),
+        outDir: _outDir.text.trim(),
         engine: _engine,
         runNow: runNow,
       );
@@ -307,82 +346,247 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   Widget build(BuildContext context) {
     final t = context.tokens;
     return AlertDialog(
-      title: const Text('新建任务'),
-      content: SizedBox(
-        width: 460,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(children: [
+      titlePadding: const EdgeInsets.fromLTRB(24, 18, 24, 0),
+      title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('新建去字幕任务',
+              style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w700, color: t.ink)),
+          const SizedBox(width: 10),
+          Text('第 ${_step + 1} 步 / 共 4 步 · ${_stepNames[_step]}',
+              style: TextStyle(fontSize: 12, color: t.faint)),
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          for (var i = 0; i < 4; i++) ...[
             Expanded(
-              child: Text(
-                _srcPath.isEmpty ? '未选择视频' : _srcPath,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    fontSize: 12.5,
-                    color: _srcPath.isEmpty ? t.faint : t.ink),
+              child: Container(
+                height: 4,
+                decoration: BoxDecoration(
+                  color: i <= _step ? t.primary : t.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-            const SizedBox(width: 10),
-            OutlinedButton.icon(
-              onPressed: _busy ? null : _pickVideo,
-              icon: const Icon(Icons.folder_open, size: 15),
-              label: const Text('选择视频'),
-            ),
-          ]),
-          const SizedBox(height: 14),
-          StyledDropdown(
-            value: _engine,
-            options: devEngineOptions.keys.toList(),
-            labelOf: (v) => devEngineOptions[v] ?? v,
-            decoration: const InputDecoration(labelText: '修复引擎'),
-            onChanged: _busy
-                ? (_) {}
-                : (v) {
-                    if (v == null) return;
-                    setState(() => _engine = v);
-                    // 切到在线引擎时顺带拉一次卡密状态。
-                    if (v == 'online') widget.state.refreshCardKey();
-                  },
-          ),
-          // 仅在线引擎展示卡密状态区(激活/余额/换卡/解绑)。
-          if (_engine == 'online') ...[
-            const SizedBox(height: 10),
-            _cardKeySection(t),
+            if (i < 3) const SizedBox(width: 6),
           ],
-          const SizedBox(height: 10),
-          TextField(
-            controller: _name,
-            decoration: const InputDecoration(
-                labelText: '任务名', hintText: '留空取视频文件名'),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _outName,
-            decoration: const InputDecoration(
-                labelText: '产出文件名', hintText: '留空取 任务名_fixed.mp4'),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(_error!,
-                  style: TextStyle(fontSize: 12, color: t.danger)),
+        ]),
+      ]),
+      content: SizedBox(
+        width: 560,
+        height: 340,
+        child: switch (_step) {
+          0 => _stepVideo(t),
+          1 => _stepOutput(t),
+          2 => _stepEngine(t),
+          _ => _stepConfirm(t),
+        },
+      ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+      actionsAlignment: MainAxisAlignment.spaceBetween,
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          if (_step > 0) ...[
+            OutlinedButton(
+              onPressed: _busy ? null : () => setState(() => _step--),
+              child: const Text('上一步'),
+            ),
+            const SizedBox(width: 10),
+          ],
+          if (_step < 3)
+            FilledButton(
+              onPressed: _canNext && !_busy ? _next : null,
+              child: const Text('下一步'),
+            )
+          else ...[
+            OutlinedButton(
+              onPressed: (_busy || _onlineBlocked) ? null : () => _submit(false),
+              child: const Text('暂不运行,仅创建'),
+            ),
+            const SizedBox(width: 10),
+            FilledButton.icon(
+              onPressed: (_busy || _onlineBlocked) ? null : () => _submit(true),
+              icon: const Icon(Icons.play_arrow, size: 17),
+              label: Text(_busy ? '创建中…' : '立即开始运行'),
             ),
           ],
         ]),
-      ),
-      actions: [
-        TextButton(
-            onPressed: _busy ? null : () => Navigator.pop(context),
-            child: const Text('取消')),
-        OutlinedButton(
-            // 在线引擎未激活或余额为 0 时禁用创建(卡密区有对应提示)。
-            onPressed: (_busy || _onlineBlocked) ? null : () => _submit(false),
-            child: const Text('创建')),
-        FilledButton(
-            onPressed: (_busy || _onlineBlocked) ? null : () => _submit(true),
-            child: const Text('创建并运行')),
       ],
+    );
+  }
+
+  Widget _stepVideo(AppTokens t) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('选择要去字幕的视频文件,原文件不会被修改。',
+          style: TextStyle(fontSize: 12.5, color: t.dim)),
+      const SizedBox(height: 14),
+      InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: _busy ? null : _pickVideo,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 22),
+          decoration: BoxDecoration(
+            color: _srcPath.isNotEmpty ? t.primarySoft : t.bg,
+            border: Border.all(
+                color: _srcPath.isNotEmpty ? t.primary : t.border,
+                width: _srcPath.isNotEmpty ? 1.5 : 1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(children: [
+            Icon(Icons.video_file,
+                size: 26, color: _srcPath.isNotEmpty ? t.primaryInk : t.faint),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_srcPath.isEmpty ? '点击选择视频' : _baseName,
+                    style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                        color: _srcPath.isNotEmpty ? t.primaryInk : t.ink)),
+                Text(_srcPath.isEmpty ? '支持 mp4 / mkv / mov / avi 等格式' : _srcPath,
+                    style: TextStyle(fontSize: 11, color: t.faint),
+                    overflow: TextOverflow.ellipsis),
+              ]),
+            ),
+            if (_srcPath.isNotEmpty)
+              Icon(Icons.check_circle, size: 18, color: t.primary),
+          ]),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _stepOutput(AppTokens t) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('处理完成的视频默认保存到源视频目录下的「去字幕」文件夹。',
+          style: TextStyle(fontSize: 12.5, color: t.dim)),
+      const SizedBox(height: 14),
+      Row(children: [
+        Expanded(
+          child: TextField(
+            controller: _outDir,
+            decoration: const InputDecoration(labelText: '输出目录'),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        const SizedBox(width: 10),
+        OutlinedButton.icon(
+          onPressed: _busy
+              ? null
+              : () async {
+                  final dir = await getDirectoryPath(confirmButtonText: '选择输出目录');
+                  if (dir != null) setState(() => _outDir.text = dir);
+                },
+          icon: const Icon(Icons.folder_open, size: 15),
+          label: const Text('浏览'),
+        ),
+      ]),
+      const SizedBox(height: 14),
+      TextField(
+        controller: _outName,
+        decoration: const InputDecoration(labelText: '输出文件名'),
+        onChanged: (_) => setState(() {}),
+      ),
+    ]);
+  }
+
+  Widget _stepEngine(AppTokens t) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('选择去字幕方式,拿不准就保持当前配置。',
+          style: TextStyle(fontSize: 12.5, color: t.dim)),
+      const SizedBox(height: 12),
+      Expanded(
+        child: ListView.separated(
+          itemCount: _engines.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemBuilder: (_, i) {
+            final (value, icon, title, desc) = _engines[i];
+            final selected = _engine == value;
+            return InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _busy
+                  ? null
+                  : () {
+                      setState(() => _engine = value);
+                      if (value == 'online') widget.state.refreshCardKey();
+                    },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: selected ? t.primarySoft : t.bg,
+                  border: Border.all(
+                      color: selected ? t.primary : t.border,
+                      width: selected ? 1.5 : 1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(children: [
+                  Icon(icon, size: 20, color: selected ? t.primaryInk : t.faint),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(title,
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: selected ? t.primaryInk : t.ink)),
+                      Text(desc, style: TextStyle(fontSize: 11, color: t.faint)),
+                    ]),
+                  ),
+                  if (selected)
+                    Icon(Icons.check_circle, size: 16, color: t.primary),
+                ]),
+              ),
+            );
+          },
+        ),
+      ),
+      if (_engine == 'online') ...[
+        const SizedBox(height: 8),
+        _cardKeySection(t),
+      ],
+    ]);
+  }
+
+  Widget _stepConfirm(AppTokens t) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('确认任务信息,选择创建方式:',
+          style: TextStyle(fontSize: 12.5, color: t.dim)),
+      const SizedBox(height: 14),
+      _summaryRow(t, '视频', _srcPath),
+      _summaryRow(t, '输出目录', _outDir.text.trim()),
+      _summaryRow(t, '输出文件', _outName.text.trim()),
+      _summaryRow(t, '去字幕方式', _engineLabel),
+      if (_error != null) ...[
+        const SizedBox(height: 10),
+        Text(_error!, style: TextStyle(fontSize: 12, color: t.danger)),
+      ],
+      const Spacer(),
+      Text('「立即开始运行」将创建任务并马上开跑(引擎忙则自动排队);「仅创建」加入任务列表稍后再跑。',
+          style: TextStyle(fontSize: 11.5, color: t.faint)),
+    ]);
+  }
+
+  Widget _summaryRow(AppTokens t, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          width: 76,
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 12.5, fontWeight: FontWeight.w600, color: t.dim)),
+        ),
+        Expanded(
+          child: Text(value,
+              style: TextStyle(fontSize: 12.5, color: t.ink),
+              overflow: TextOverflow.ellipsis),
+        ),
+      ]),
     );
   }
 

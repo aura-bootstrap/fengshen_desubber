@@ -2,6 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"fengshen-desub/internal/runner"
 	"fengshen-desub/internal/store"
@@ -35,5 +41,40 @@ func (d *dockerRunner) Run(ctx context.Context, tk *store.Task, events chan<- Ev
 	err := runner.Run(ctx, o, tk.WorkDir, tk.SrcPath, tk.OutName, tk.ParamsJSON, ch)
 	close(ch)
 	<-done
-	return err
+	if err != nil {
+		return err
+	}
+	return copyArtifact(tk.WorkDir, tk.OutName, tk.ParamsJSON)
+}
+
+// copyArtifact 任务成功后把产物复制到用户选的输出目录(params.out_dir,
+// 空则只留工作区)。复制失败报错但产物仍在工作区,错误信息带原路径。
+func copyArtifact(workDir, outName, paramsJSON string) error {
+	var p runner.Params
+	if err := json.Unmarshal([]byte(paramsJSON), &p); err != nil {
+		return nil // 快照损坏已由 runner 报过,这里不重复
+	}
+	dir := strings.TrimSpace(p.OutDir)
+	if dir == "" {
+		return nil
+	}
+	src := filepath.Join(workDir, outName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("产物已生成(%s),但输出目录创建失败: %v", src, err)
+	}
+	dst := filepath.Join(dir, outName)
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("产物已生成(%s),但读取失败: %v", src, err)
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("产物已生成(%s),但写入输出目录失败: %v", src, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return fmt.Errorf("产物已生成(%s),但复制到输出目录失败: %v", src, err)
+	}
+	return out.Close()
 }

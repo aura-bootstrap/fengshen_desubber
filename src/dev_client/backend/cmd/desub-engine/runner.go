@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/aura-bootstrap/fengshen_desubber/internal/store"
 )
@@ -94,7 +95,10 @@ func (s *server) runLocal(ctx context.Context, tk *store.Task, events chan<- Eve
 	}
 	if cfg.Online.Enabled {
 		// 在线分支:不拉本地 desub.exe,上传原片给计费服务云端处理(见 online.go)。
-		return runOnline(ctx, s.exeDir, tk.WorkDir, tk.SrcPath, tk.OutName, events)
+		if err := runOnline(ctx, s.exeDir, tk.WorkDir, tk.SrcPath, tk.OutName, events); err != nil {
+			return err
+		}
+		return copyTaskOutput(tk.WorkDir, tk.OutName, cfg.Output.Dir)
 	}
 	bin := filepath.Join(s.exeDir, "desub.exe")
 	if _, err := os.Stat(bin); err != nil {
@@ -130,6 +134,36 @@ func (s *server) runLocal(ctx context.Context, tk *store.Task, events chan<- Eve
 	}
 	if _, err := os.Stat(filepath.Join(tk.WorkDir, tk.OutName)); err != nil {
 		return fmt.Errorf("desub 未产出 %s", tk.OutName)
+	}
+	return copyTaskOutput(tk.WorkDir, tk.OutName, cfg.Output.Dir)
+}
+
+func copyTaskOutput(workDir, outName, outDir string) error {
+	dir := strings.TrimSpace(outDir)
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("产物已生成,但输出目录创建失败: %v", err)
+	}
+	srcPath := filepath.Join(workDir, outName)
+	dstPath := filepath.Join(dir, outName)
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("产物读取失败: %v", err)
+	}
+	defer src.Close()
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("产物已生成,但写入输出目录失败: %v", err)
+	}
+	_, copyErr := io.Copy(dst, src)
+	closeErr := dst.Close()
+	if copyErr != nil {
+		return fmt.Errorf("产物已生成,但复制到输出目录失败: %v", copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("产物已生成,但关闭输出文件失败: %v", closeErr)
 	}
 	return nil
 }

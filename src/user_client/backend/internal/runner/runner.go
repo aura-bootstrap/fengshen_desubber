@@ -69,6 +69,8 @@ type Params struct {
 	// 在线去字幕:true 时不启 docker,走计费服务云端管线(见 online.go)。
 	Online   bool   `json:"online"`
 	Provider string `json:"provider"` // 云端引擎选择,可空(透传 X-Provider 头)
+	// OutDir 不是引擎旗标:产物成功后复制到该目录(空=只留工作区)。args() 忽略。
+	OutDir string `json:"out_dir"`
 }
 
 // args converts the snapshot into desub remove flags.

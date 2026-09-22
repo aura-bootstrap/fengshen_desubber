@@ -65,6 +65,13 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 输出目录创建期预建(尽早失败):选了目录但建不了就直接 422,不入库。
+	if d := strings.TrimSpace(rp.OutDir); d != "" {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, "输出目录不可用: "+d)
+			return
+		}
+	}
 
 	tk := &store.Task{
 		Name: req.Name, SrcPath: src, OutName: req.OutName, ParamsJSON: string(snap),

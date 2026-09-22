@@ -67,12 +67,20 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		params = string(pb)
 	}
 
-	// 在线去字幕前置校验:未激活卡密直接在创建期 400,不入库(尽早失败)。
+	// 创建期校验卡密与输出目录,尽早失败且不入库。
 	var probe Config
-	if err := json.Unmarshal([]byte(params), &probe); err == nil && probe.Online.Enabled {
-		if _, err := cardkey.LoadKeyFile(s.exeDir); err != nil {
-			writeErr(w, http.StatusBadRequest, "在线去字幕需要先激活卡密(新建任务选在线引擎后激活)")
-			return
+	if err := json.Unmarshal([]byte(params), &probe); err == nil {
+		if probe.Online.Enabled {
+			if _, err := cardkey.LoadKeyFile(s.exeDir); err != nil {
+				writeErr(w, http.StatusBadRequest, "在线去字幕需要先激活卡密(新建任务选在线引擎后激活)")
+				return
+			}
+		}
+		if dir := strings.TrimSpace(probe.Output.Dir); dir != "" {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				writeErr(w, http.StatusUnprocessableEntity, "输出目录不可用: "+dir)
+				return
+			}
 		}
 	}
 
