@@ -8,7 +8,9 @@ import 'models.dart';
 
 /// 全局状态:任务列表 + SSE 驱动刷新 + 引擎进程生命周期。
 class AppState extends ChangeNotifier {
-  final EngineClient client = EngineClient();
+  final EngineClient client;
+
+  AppState({EngineClient? client}) : client = client ?? EngineClient();
 
   List<DesubTask> tasks = [];
   bool engineReady = false;
@@ -74,6 +76,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _isOnlineTask(int taskId) {
+    final i = tasks.indexWhere((t) => t.id == taskId);
+    return i >= 0 && tasks[i].isOnline;
+  }
+
   void _onEvent(EngineEvent ev) {
     if (ev.taskId != 0 && ev.type == 'log') {
       final list = logs.putIfAbsent(ev.taskId, () => []);
@@ -98,8 +105,18 @@ class AppState extends ChangeNotifier {
           );
         }
         notifyListeners();
-      case 'stage' || 'queue' || 'done':
-        refresh();
+      case 'stage':
+        if (_isOnlineTask(ev.taskId) && ev.stage == 'cloud') {
+          unawaited(refreshCardKey());
+        }
+        unawaited(refresh());
+      case 'queue':
+        unawaited(refresh());
+      case 'done':
+        if (_isOnlineTask(ev.taskId)) {
+          unawaited(refreshCardKey());
+        }
+        unawaited(refresh());
       default:
         notifyListeners();
     }

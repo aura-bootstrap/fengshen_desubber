@@ -3,6 +3,7 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -214,6 +215,7 @@ func (e *env) createTask(t *testing.T) (int, []byte) {
 	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/tasks", nil)
 	req.Header.Set("Authorization", "Bearer "+e.userTok)
 	req.Header.Set("X-Video-Filename", "v.mp4")
+	req.Header.Set("X-Video-Path-B64", base64.RawURLEncoding.EncodeToString([]byte(`D:\视频\v.mp4`)))
 	req.Header.Set("X-Machine-Hash", e.machine)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -327,6 +329,39 @@ func TestFullFlowSuccess(t *testing.T) {
 	json.Unmarshal(b, &bal)
 	if bal.Credits != 3 {
 		t.Fatalf("balance want 3, got %d", bal.Credits)
+	}
+
+	stored, err := e.st.GetTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.SourceName != "v.mp4" || stored.SourcePath != `D:\视频\v.mp4` ||
+		stored.SubmittedAt == 0 || stored.FinishedAt == 0 || stored.FinishedAt < stored.SubmittedAt {
+		t.Fatalf("task lifecycle fields incomplete: %+v", stored)
+	}
+	code, b = e.do(t, "GET", "/v1/admin/audit", e.adminTok, nil)
+	if code != http.StatusOK {
+		t.Fatalf("audit: %d %s", code, b)
+	}
+	var auditResp struct {
+		Audit []map[string]any `json:"audit"`
+	}
+	if err := json.Unmarshal(b, &auditResp); err != nil {
+		t.Fatal(err)
+	}
+	foundCompleted := false
+	for _, entry := range auditResp.Audit {
+		if entry["task_id"] == taskID && entry["action"] == "task_completed" {
+			foundCompleted = true
+			if entry["source_path"] != `D:\视频\v.mp4` || entry["duration_sec"] != float64(65) ||
+				entry["cost"] != float64(2) || entry["machine_hash"] != e.machine ||
+				entry["provider"] == "" || entry["status"] != "completed" {
+				t.Fatalf("completed audit incomplete: %#v", entry)
+			}
+		}
+	}
+	if !foundCompleted {
+		t.Fatalf("completed audit not found: %#v", auditResp.Audit)
 	}
 }
 

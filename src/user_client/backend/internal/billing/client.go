@@ -6,6 +6,7 @@ package billing
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -166,6 +167,7 @@ func (c *Client) CreateTask(ctx context.Context, filePath, provider string, onPr
 		return nil, err
 	}
 	req.Header.Set("X-Video-Filename", filepath.Base(filePath))
+	req.Header.Set("X-Video-Path-B64", base64.RawURLEncoding.EncodeToString([]byte(filePath)))
 	if provider != "" {
 		req.Header.Set("X-Provider", provider)
 	}

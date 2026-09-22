@@ -35,6 +35,11 @@ type Task struct {
 	LasTaskID   string `json:"las_task_id,omitempty"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
+	CardMasked  string `json:"card_masked,omitempty"`
+	SourceName  string `json:"source_name,omitempty"`
+	SourcePath  string `json:"source_path,omitempty"`
+	SubmittedAt int64  `json:"submitted_at,omitempty"`
+	FinishedAt  int64  `json:"finished_at,omitempty"`
 }
 
 func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
@@ -85,6 +90,7 @@ func (s *Store) CreateUploadingTask(ctx context.Context, t *Task) error {
 	}
 	t.MachineHash = c.MachineHash
 	t.CardHash = c.Hash
+	t.CardMasked = c.CodeMasked
 	t.Status = TaskUploading
 	now := s.Now().Unix()
 	t.CreatedAt, t.UpdatedAt = now, now
@@ -97,6 +103,13 @@ func (s *Store) CreateUploadingTask(ctx context.Context, t *Task) error {
 	}
 	if !ok {
 		return ErrDuplicate
+	}
+	if err := s.AppendTaskAudit(ctx, AuditEntry{
+		Actor: "client", Action: "task_created", Target: t.ID, OK: true,
+		TaskID: t.ID, MachineHash: t.MachineHash, CardID: t.CardID, CardMasked: t.CardMasked,
+		Provider: t.Provider, SourceName: t.SourceName, SourcePath: t.SourcePath, Status: t.Status,
+	}); err != nil {
+		log.Printf("task %s append create audit: %v", t.ID, err)
 	}
 	return nil
 }
@@ -115,6 +128,7 @@ func (s *Store) SubmitTaskWithDebit(ctx context.Context, taskID string, duration
 		n.Status = TaskProcessing
 		n.DurationSec = durationSec
 		n.Cost = cost
+		n.SubmittedAt = s.Now().Unix()
 	})
 	if err != nil {
 		return 0, err
@@ -125,11 +139,24 @@ func (s *Store) SubmitTaskWithDebit(ctx context.Context, taskID string, duration
 	balanceAfter, err = s.DebitMachine(ctx, t.MachineHash, cost, "debit", t.ID, t.CardID)
 	if err != nil {
 		if fresh, gerr := s.GetTask(ctx, taskID); gerr == nil {
-			if _, rerr := s.casTask(ctx, fresh, func(n *Task) { n.Status = TaskUploading }); rerr != nil {
+			if _, rerr := s.casTask(ctx, fresh, func(n *Task) {
+				n.Status = TaskUploading
+				n.DurationSec = 0
+				n.Cost = 0
+				n.SubmittedAt = 0
+			}); rerr != nil {
 				log.Printf("task %s rollback to uploading failed: %v", taskID, rerr)
 			}
 		}
 		return balanceAfter, err
+	}
+	if err := s.AppendTaskAudit(ctx, AuditEntry{
+		Actor: "system", Action: "task_debited", Target: t.ID, OK: true,
+		TaskID: t.ID, MachineHash: t.MachineHash, CardID: t.CardID, CardMasked: t.CardMasked,
+		Provider: t.Provider, SourceName: t.SourceName, SourcePath: t.SourcePath,
+		DurationSec: t.DurationSec, Cost: t.Cost, BalanceAfter: &balanceAfter, Status: t.Status,
+	}); err != nil {
+		log.Printf("task %s append debit audit: %v", t.ID, err)
 	}
 	return balanceAfter, nil
 }
@@ -145,17 +172,34 @@ func (s *Store) FailTaskWithRefund(ctx context.Context, taskID, errMsg string) e
 		return nil // 已终态，不重复退款
 	}
 	wasProcessing := t.Status == TaskProcessing
-	ok, err := s.casTask(ctx, t, func(n *Task) { n.Status = TaskFailed; n.Error = errMsg })
+	ok, err := s.casTask(ctx, t, func(n *Task) {
+		n.Status = TaskFailed
+		n.Error = errMsg
+		n.FinishedAt = s.Now().Unix()
+	})
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errors.New("fail task: cas conflict")
 	}
+	var balanceAfter *int64
 	if wasProcessing && t.MachineHash != "" {
-		if _, err := s.CreditMachine(ctx, t.MachineHash, t.Cost, "refund", t.ID, t.CardID); err != nil {
-			log.Printf("task %s refund failed: %v", t.ID, err)
+		balance, refundErr := s.CreditMachine(ctx, t.MachineHash, t.Cost, "refund", t.ID, t.CardID)
+		if refundErr != nil {
+			log.Printf("task %s refund failed: %v", t.ID, refundErr)
+		} else {
+			balanceAfter = &balance
 		}
+	}
+	if err := s.AppendTaskAudit(ctx, AuditEntry{
+		Actor: "system", Action: "task_failed", Target: t.ID, Detail: errMsg, OK: true,
+		TaskID: t.ID, MachineHash: t.MachineHash, CardID: t.CardID, CardMasked: t.CardMasked,
+		Provider: t.Provider, SourceName: t.SourceName, SourcePath: t.SourcePath,
+		DurationSec: t.DurationSec, Cost: t.Cost, BalanceAfter: balanceAfter,
+		Status: t.Status, Error: t.Error,
+	}); err != nil {
+		log.Printf("task %s append failure audit: %v", t.ID, err)
 	}
 	return nil
 }
@@ -178,12 +222,24 @@ func (s *Store) CompleteTask(ctx context.Context, id, resultURL string) error {
 	if err != nil {
 		return err
 	}
-	ok, err := s.casTask(ctx, t, func(n *Task) { n.Status = TaskCompleted; n.ResultURL = resultURL })
+	ok, err := s.casTask(ctx, t, func(n *Task) {
+		n.Status = TaskCompleted
+		n.ResultURL = resultURL
+		n.FinishedAt = s.Now().Unix()
+	})
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errors.New("complete task: cas conflict")
+	}
+	if err := s.AppendTaskAudit(ctx, AuditEntry{
+		Actor: "system", Action: "task_completed", Target: t.ID, OK: true,
+		TaskID: t.ID, MachineHash: t.MachineHash, CardID: t.CardID, CardMasked: t.CardMasked,
+		Provider: t.Provider, SourceName: t.SourceName, SourcePath: t.SourcePath,
+		DurationSec: t.DurationSec, Cost: t.Cost, Status: t.Status,
+	}); err != nil {
+		log.Printf("task %s append completion audit: %v", t.ID, err)
 	}
 	return nil
 }

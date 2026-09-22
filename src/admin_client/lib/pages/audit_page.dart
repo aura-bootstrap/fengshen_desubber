@@ -35,6 +35,21 @@ class _AuditPageState extends State<AuditPage> {
     }
   }
 
+  String _actionLabel(String action) => switch (action) {
+        'task_created' => '创建任务',
+        'task_debited' => '扣费提交',
+        'task_completed' => '处理完成',
+        'task_failed' => '处理失败/退款',
+        _ => action,
+      };
+
+  String _duration(int seconds) {
+    if (seconds <= 0) return '';
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return m == 0 ? '$s秒' : '$m分$s秒';
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -86,35 +101,64 @@ class _AuditPageState extends State<AuditPage> {
                             constraints: BoxConstraints(minWidth: bc.maxWidth),
                             child: SingleChildScrollView(
                               child: DataTable(
-                            columnSpacing: 32,
-                            horizontalMargin: 16,
-                            columns: const [
-                              DataColumn(label: Text('时间')),
-                              DataColumn(label: Text('操作者')),
-                              DataColumn(label: Text('动作')),
-                              DataColumn(label: Text('对象')),
-                              DataColumn(label: Text('详情')),
-                              DataColumn(label: Text('结果')),
-                            ],
-                            rows: [
-                              for (final e in _entries!)
-                                DataRow(cells: [
-                                  DataCell(Text(fmtTs(e.ts))),
-                                  DataCell(Text(e.actor)),
-                                  DataCell(Text(e.action)),
-                                  DataCell(Text(e.target)),
-                                  // 长串(machine=...)限宽省略,保住结果列不出视口
-                                  DataCell(SizedBox(
-                                    width: 380,
-                                    child: Text(e.detail,
-                                        overflow: TextOverflow.ellipsis),
-                                  )),
-                                  DataCell(Icon(
-                                      e.ok ? Icons.check_circle : Icons.cancel,
-                                      size: 16,
-                                      color: e.ok ? t.success : t.danger)),
-                                ]),
-                            ],
+                                columnSpacing: 24,
+                                horizontalMargin: 16,
+                                columns: const [
+                                  DataColumn(label: Text('时间')),
+                                  DataColumn(label: Text('事件')),
+                                  DataColumn(label: Text('状态')),
+                                  DataColumn(label: Text('任务 ID')),
+                                  DataColumn(label: Text('文件路径')),
+                                  DataColumn(label: Text('时长')),
+                                  DataColumn(label: Text('扣费')),
+                                  DataColumn(label: Text('扣后余额')),
+                                  DataColumn(label: Text('机器号')),
+                                  DataColumn(label: Text('卡号')),
+                                  DataColumn(label: Text('平台')),
+                                  DataColumn(label: Text('详情/错误')),
+                                  DataColumn(label: Text('结果')),
+                                ],
+                                rows: [
+                                  for (final e in _entries!)
+                                    DataRow(cells: [
+                                      DataCell(Text(fmtTs(e.ts))),
+                                      DataCell(Text(_actionLabel(e.action))),
+                                      DataCell(Text(e.status)),
+                                      DataCell(SelectableText(e.taskId.isEmpty
+                                          ? e.target
+                                          : e.taskId)),
+                                      DataCell(SizedBox(
+                                        width: 320,
+                                        child: SelectableText(e.sourcePath.isEmpty
+                                            ? e.sourceName
+                                            : e.sourcePath),
+                                      )),
+                                      DataCell(Text(_duration(e.durationSec))),
+                                      DataCell(Text(e.cost == 0 ? '' : '${e.cost} 点')),
+                                      DataCell(Text(e.balanceAfter?.toString() ?? '')),
+                                      DataCell(SizedBox(
+                                        width: 260,
+                                        child: SelectableText(e.machineHash),
+                                      )),
+                                      DataCell(Text(e.cardMasked.isEmpty
+                                          ? (e.cardId == 0 ? '' : '#${e.cardId}')
+                                          : e.cardMasked)),
+                                      DataCell(Text(e.provider)),
+                                      DataCell(SizedBox(
+                                        width: 280,
+                                        child: Text(
+                                            e.error.isEmpty ? e.detail : e.error,
+                                            overflow: TextOverflow.ellipsis),
+                                      )),
+                                      DataCell(Icon(
+                                          e.ok
+                                              ? Icons.check_circle
+                                              : Icons.cancel,
+                                          size: 16,
+                                          color:
+                                              e.ok ? t.success : t.danger)),
+                                    ]),
+                                ],
                               ),
                             ),
                           ),

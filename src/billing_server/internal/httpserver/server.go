@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/admin/cards/revoke", s.auth(ddbstore.RoleAdmin, s.revokeCard))
 	mux.Handle("POST /v1/admin/cards/unrevoke", s.auth(ddbstore.RoleAdmin, s.unrevokeCard))
 	mux.Handle("POST /v1/admin/cards/unbind", s.auth(ddbstore.RoleAdmin, s.unbindCard))
+	mux.Handle("GET /v1/admin/audit", s.auth(ddbstore.RoleAdmin, s.cardAudit))
 	mux.Handle("GET /v1/admin/cards/audit", s.auth(ddbstore.RoleAdmin, s.cardAudit))
 	mux.Handle("GET /v1/admin/cards", s.auth(ddbstore.RoleAdmin, s.listCards))
 	mux.Handle("GET /v1/cards/{card}/status", s.auth("", s.cardStatus))
@@ -273,8 +275,8 @@ func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	uploadURLExpireSec = 7200               // 预签名 PUT/GET 有效期(客户端直传与算子回源)
-	pollTimeout        = 30 * time.Minute   // processing 超过此时长判超时失败并退款
+	uploadURLExpireSec = 7200             // 预签名 PUT/GET 有效期(客户端直传与算子回源)
+	pollTimeout        = 30 * time.Minute // processing 超过此时长判超时失败并退款
 )
 
 // createTask 建单(不读 body、不扣点):登记 uploading 任务并发预签名 PUT URL,
@@ -290,6 +292,15 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if ext != ".mp4" && ext != ".mov" {
 		writeErr(w, http.StatusBadRequest, "only mp4/mov supported")
 		return
+	}
+	var sourcePath string
+	if encoded := r.Header.Get("X-Video-Path-B64"); encoded != "" {
+		decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil || len(decoded) > 4096 {
+			writeErr(w, http.StatusBadRequest, "invalid video path")
+			return
+		}
+		sourcePath = string(decoded)
 	}
 
 	// 平台路由:X-Provider 头缺省走默认平台,未知名拒绝。
@@ -310,7 +321,10 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 	taskID := uuid.NewString()
 	srcKey := fmt.Sprintf("input/%s%s", taskID, ext)
-	t := &ddbstore.Task{ID: taskID, CardID: c.ID, Provider: providerName, SrcKey: srcKey}
+	t := &ddbstore.Task{
+		ID: taskID, CardID: c.ID, Provider: providerName, SrcKey: srcKey,
+		SourceName: filename, SourcePath: sourcePath,
+	}
 	if err := s.st.CreateUploadingTask(r.Context(), t); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

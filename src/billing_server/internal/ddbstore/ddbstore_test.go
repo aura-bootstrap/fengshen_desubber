@@ -281,7 +281,10 @@ func TestTaskLifecycle(t *testing.T) {
 	}
 
 	// 建单不扣点:uploading 态,余额不动
-	t1 := &Task{ID: "task-" + code[:8] + "-1", CardID: c.ID, Provider: "las", SrcKey: "input/a.mp4"}
+	t1 := &Task{
+		ID: "task-" + code[:8] + "-1", CardID: c.ID, Provider: "las", SrcKey: "input/a.mp4",
+		SourceName: "样片.mp4", SourcePath: `D:\视频\样片.mp4`,
+	}
 	if err := st.CreateUploadingTask(ctx, t1); err != nil {
 		t.Fatalf("CreateUploadingTask: %v", err)
 	}
@@ -305,7 +308,8 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("re-submit should be ErrTaskState: %v", err)
 	}
 	got, _ := st.GetTask(ctx, t1.ID)
-	if got.Status != TaskProcessing || got.Provider != "las" || got.DurationSec != 50 || got.Cost != 1 {
+	if got.Status != TaskProcessing || got.Provider != "las" || got.DurationSec != 50 || got.Cost != 1 ||
+		got.SubmittedAt == 0 || got.SourceName != "样片.mp4" || got.SourcePath != `D:\视频\样片.mp4` {
 		t.Fatalf("processing task: %+v", got)
 	}
 
@@ -317,7 +321,8 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("CompleteTask: %v", err)
 	}
 	done, _ := st.GetTask(ctx, t1.ID)
-	if done.Status != TaskCompleted || done.ResultURL != "https://tos/out.mp4" || done.LasTaskID != "las-123" {
+	if done.Status != TaskCompleted || done.ResultURL != "https://tos/out.mp4" || done.LasTaskID != "las-123" ||
+		done.FinishedAt == 0 || done.FinishedAt < done.SubmittedAt {
 		t.Fatalf("completed: %+v", done)
 	}
 
@@ -340,8 +345,31 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("balance after refund: %d", m.Balance)
 	}
 	ft, _ := st.GetTask(ctx, t2.ID)
-	if ft.Status != TaskFailed || ft.Error != "boom" {
+	if ft.Status != TaskFailed || ft.Error != "boom" || ft.FinishedAt == 0 {
 		t.Fatalf("failed task: %+v", ft)
+	}
+
+	audit, err := st.AuditList(ctx)
+	if err != nil {
+		t.Fatalf("AuditList tasks: %v", err)
+	}
+	actions := map[string]int{}
+	for _, entry := range audit {
+		if entry["scope"] != "task" {
+			continue
+		}
+		action, _ := entry["action"].(string)
+		actions[action]++
+		if entry["task_id"] == t1.ID && action == "task_debited" {
+			if entry["source_path"] != `D:\视频\样片.mp4` || entry["duration_sec"] != float64(50) ||
+				entry["cost"] != float64(1) || entry["machine_hash"] != machine || entry["balance_after"] != float64(9) {
+				t.Fatalf("debit audit incomplete: %#v", entry)
+			}
+		}
+	}
+	if actions["task_created"] != 2 || actions["task_debited"] != 2 ||
+		actions["task_completed"] != 1 || actions["task_failed"] != 1 {
+		t.Fatalf("task audit actions: %#v", actions)
 	}
 }
 

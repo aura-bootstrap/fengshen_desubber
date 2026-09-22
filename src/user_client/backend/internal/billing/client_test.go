@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -137,6 +138,11 @@ func TestCreateTaskStreamsUpload(t *testing.T) {
 		case r.URL.Path == "/v1/tasks" && r.Method == http.MethodPost:
 			if got := r.Header.Get("X-Video-Filename"); got != "样片 01.mp4" {
 				t.Errorf("X-Video-Filename = %q", got)
+			}
+			encodedPath := r.Header.Get("X-Video-Path-B64")
+			decodedPath, err := base64.RawURLEncoding.DecodeString(encodedPath)
+			if err != nil || string(decodedPath) != video {
+				t.Errorf("X-Video-Path-B64 decode = %q err=%v, want %q", decodedPath, err, video)
 			}
 			if got := r.Header.Get("X-Provider"); got != "diffueraser" {
 				t.Errorf("X-Provider = %q", got)

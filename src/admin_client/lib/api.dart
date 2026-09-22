@@ -36,19 +36,45 @@ class CardInfo {
 
 class AuditEntry {
   final int ts;
+  final String scope;
   final String actor;
   final String action;
   final String target;
   final String detail;
   final bool ok;
+  final String taskId;
+  final String machineHash;
+  final int cardId;
+  final String cardMasked;
+  final String provider;
+  final String sourceName;
+  final String sourcePath;
+  final int durationSec;
+  final int cost;
+  final int? balanceAfter;
+  final String status;
+  final String error;
 
   AuditEntry.fromJson(Map<String, dynamic> m)
       : ts = m['ts'] as int? ?? 0,
+        scope = m['scope'] as String? ?? '',
         actor = m['actor'] as String? ?? '',
         action = m['action'] as String? ?? '',
         target = m['target'] as String? ?? '',
         detail = m['detail'] as String? ?? '',
-        ok = m['ok'] as bool? ?? false;
+        ok = m['ok'] as bool? ?? false,
+        taskId = m['task_id'] as String? ?? '',
+        machineHash = m['machine_hash'] as String? ?? '',
+        cardId = m['card_id'] as int? ?? 0,
+        cardMasked = m['card_masked'] as String? ?? '',
+        provider = m['provider'] as String? ?? '',
+        sourceName = m['source_name'] as String? ?? '',
+        sourcePath = m['source_path'] as String? ?? '',
+        durationSec = m['duration_sec'] as int? ?? 0,
+        cost = m['cost'] as int? ?? 0,
+        balanceAfter = m['balance_after'] as int?,
+        status = m['status'] as String? ?? '',
+        error = m['error'] as String? ?? '';
 }
 
 class CreditTx {
@@ -164,7 +190,7 @@ class AdminApi {
           body: {'card_id': cardId, 'code': code});
 
   Future<List<AuditEntry>> audit() async {
-    final d = await _req('GET', '/v1/admin/cards/audit');
+    final d = await _req('GET', '/v1/admin/audit');
     return [for (final m in (d['audit'] as List? ?? [])) AuditEntry.fromJson(m)];
   }
 
