@@ -3,7 +3,7 @@
 ; 产物: installer\user_client\output\峰神·去字幕-v1.0.2-installer.exe
 
 #define MyAppName "峰神·去字幕"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "峰神引擎"
 #define MyAppExeName "峰神引擎-字幕去除器-用户版.exe"
 

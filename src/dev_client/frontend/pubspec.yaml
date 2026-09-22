@@ -1,7 +1,7 @@
 name: desub_dev_client
 description: 峰神·去字幕(开发版) Flutter 桌面壳
 publish_to: "none"
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: ^3.9.0
