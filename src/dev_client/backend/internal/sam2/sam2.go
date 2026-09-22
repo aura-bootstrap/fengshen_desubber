@@ -76,17 +76,18 @@ func (c *Client) Refine(input string, w, bandY, bandH int, fps float64, masks []
 	}
 	defer os.RemoveAll(jobDir)
 
+	todo := make([]seg, 0, len(segs))
 	for _, sg := range segs {
-		has := false
 		for k := sg.s; k <= sg.e; k++ {
 			if !masks[k].Empty() {
-				has = true
+				todo = append(todo, sg)
 				break
 			}
 		}
-		if !has {
-			continue
-		}
+	}
+	fmt.Fprintf(log, "sam2: refining masks in %d segment(s)\n", len(todo))
+	done := 0
+	for _, sg := range todo {
 		ref, err := c.refineSegment(jobDir, input, w, bandY, bandH, fps, masks[sg.s:sg.e+1], sg.s)
 		if err != nil {
 			fmt.Fprintf(log, "warn: sam2 segment %d-%d failed (%v); keeping stroke masks\n", sg.s, sg.e, err)
@@ -95,6 +96,8 @@ func (c *Client) Refine(input string, w, bandY, bandH int, fps float64, masks []
 		for k := sg.s; k <= sg.e; k++ {
 			out[k] = ref[k-sg.s]
 		}
+		done++
+		fmt.Fprintf(log, "sam2 %d/%d\r", done, len(todo))
 	}
 	return out, nil
 }

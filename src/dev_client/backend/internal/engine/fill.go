@@ -98,6 +98,7 @@ func CoveragePerEvent(evs []events.Event, stats []FrameStat) []EventCoverage {
 // collected in fallback and their frames are left to the motion tier.
 func framePainted(o FillOptions) (map[int][]byte, []int, error) {
 	painted := map[int][]byte{}
+	paintedN := 0
 	var fallback []int
 	logf := func(format string, a ...any) {
 		if o.Log != nil {
@@ -133,6 +134,7 @@ func framePainted(o FillOptions) (map[int][]byte, []int, error) {
 		if len(o.RawMasks) > end {
 			raw = o.RawMasks[ev.StartF : end+1]
 		}
+		logf("fill: event %d (%d-%d): painting %d frames", k, ev.StartF, end, end-ev.StartF+1)
 		frames, err := o.Painter.Inpaint(PaintJob{
 			Input: o.Input, W: o.W, BandY: o.BandY, BandH: o.BandH,
 			FPS: o.FPS, StartF: ev.StartF, EndF: end,
@@ -152,6 +154,10 @@ func framePainted(o FillOptions) (map[int][]byte, []int, error) {
 				return nil, nil, fmt.Errorf("fill: painter frame %d has %d bytes, want %d", ev.StartF+j, len(fr), o.W*o.BandH*3)
 			}
 			painted[ev.StartF+j] = fr
+		}
+		paintedN += end - ev.StartF + 1
+		if o.Log != nil {
+			fmt.Fprintf(o.Log, "repair %d/%d\r", paintedN, len(o.Masks))
 		}
 	}
 	return painted, fallback, nil

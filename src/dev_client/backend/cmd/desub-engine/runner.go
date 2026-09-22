@@ -157,7 +157,7 @@ var (
 	reStageOCR    = regexp.MustCompile(`^ocr: `)
 	reStageEngine = regexp.MustCompile(`^engine \S+.* -> `)
 	reStageVerify = regexp.MustCompile(`^verify: `)
-	reProgress    = regexp.MustCompile(`^repair (\d+)/(\d+)$`)
+	reProgress    = regexp.MustCompile(`^(?:repair|sam2) (\d+)/(\d+)$`)
 )
 
 // parseStream consumes desub stdout: lines and \r-separated progress ticks.

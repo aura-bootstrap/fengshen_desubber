@@ -44,7 +44,7 @@ func (o *DockerOptions) defaults() {
 		o.Image = "desub:cu124"
 	}
 	if o.Bin == "" {
-		o.Bin = "/src/bin/desub-lx-v14"
+		o.Bin = "/src/bin/desub-lx-v15"
 	}
 	if o.Proxy == "" {
 		o.Proxy = "http://host.docker.internal:7897"
@@ -231,7 +231,7 @@ var (
 	reStageOCR    = regexp.MustCompile(`^ocr: `)
 	reStageEngine = regexp.MustCompile(`^engine \S+.* -> `)
 	reStageVerify = regexp.MustCompile(`^verify: `)
-	reProgress    = regexp.MustCompile(`^repair (\d+)/(\d+)$`)
+	reProgress    = regexp.MustCompile(`^(?:repair|sam2) (\d+)/(\d+)$`)
 )
 
 // parseStream consumes desub stdout: lines and \r-separated progress ticks.

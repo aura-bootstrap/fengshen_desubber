@@ -334,6 +334,7 @@ func Run(o Options) (*Report, error) {
 			var barList []alpha.FrameBar
 			base.Bars = &barList
 			var frep *engine.FillReport
+			fmt.Fprintf(o.Log, "engine %s: fill start -> %s\n", o.Engine, o.Output)
 			frep, err = engine.RunFill(engine.FillOptions{
 				TemporalOptions: base,
 				Events:          evs,
