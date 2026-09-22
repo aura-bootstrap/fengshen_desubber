@@ -20,26 +20,29 @@ func auditSK(ts int64) string {
 	return fmt.Sprintf("%013d#%010d#%s", ts, seqCounter.Add(1), hex.EncodeToString(b))
 }
 
-// AuditEntry 审计条目。卡/账号管理行为使用基础字段；云任务事件同时填结构化任务字段。
+// AuditEntry 审计条目。卡/账号管理行为使用基础字段；云任务使用按任务 ID 更新的结构化快照。
 type AuditEntry struct {
-	TS           int64  `json:"ts"`
-	Actor        string `json:"actor"`
-	Action       string `json:"action"`
-	Target       string `json:"target"`
-	Detail       string `json:"detail,omitempty"`
-	OK           bool   `json:"ok"`
-	TaskID       string `json:"task_id,omitempty"`
-	MachineHash  string `json:"machine_hash,omitempty"`
-	CardID       int64  `json:"card_id,omitempty"`
-	CardMasked   string `json:"card_masked,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	SourceName   string `json:"source_name,omitempty"`
-	SourcePath   string `json:"source_path,omitempty"`
-	DurationSec  int64  `json:"duration_sec,omitempty"`
-	Cost         int64  `json:"cost,omitempty"`
-	BalanceAfter *int64 `json:"balance_after,omitempty"`
-	Status       string `json:"status,omitempty"`
-	Error        string `json:"error,omitempty"`
+	TS            int64  `json:"ts"`
+	UpdatedAt     int64  `json:"updated_at,omitempty"`
+	Actor         string `json:"actor"`
+	Action        string `json:"action"`
+	Target        string `json:"target"`
+	Detail        string `json:"detail,omitempty"`
+	OK            bool   `json:"ok"`
+	TaskID        string `json:"task_id,omitempty"`
+	MachineHash   string `json:"machine_hash,omitempty"`
+	CardID        int64  `json:"card_id,omitempty"`
+	CardMasked    string `json:"card_masked,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	SourceName    string `json:"source_name,omitempty"`
+	SourcePath    string `json:"source_path,omitempty"`
+	DurationSec   int64  `json:"duration_sec,omitempty"`
+	EstimatedCost int64  `json:"estimated_cost,omitempty"`
+	Cost          int64  `json:"cost,omitempty"`
+	Charged       bool   `json:"charged,omitempty"`
+	BalanceAfter  *int64 `json:"balance_after,omitempty"`
+	Status        string `json:"status,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // AppendAudit 向 audit:card 追加一条。失败由调用方记日志，不回滚业务态（D1=A）。
@@ -47,9 +50,18 @@ func (s *Store) AppendAudit(ctx context.Context, e AuditEntry) error {
 	return s.appendAudit(ctx, "card", e)
 }
 
-// AppendTaskAudit 向 audit:task 追加一条云任务生命周期记录。
+// AppendTaskAudit 按任务 ID 写入同一条实时快照。
 func (s *Store) AppendTaskAudit(ctx context.Context, e AuditEntry) error {
-	return s.appendAudit(ctx, "task", e)
+	if e.TaskID == "" {
+		return fmt.Errorf("task audit: empty task id")
+	}
+	now := s.Now().Unix()
+	if e.TS == 0 {
+		e.TS = now
+	}
+	e.UpdatedAt = now
+	_, err := s.cli.WithContext(ctx).HSET(keyAudit+"task", "task:"+e.TaskID, mustMarshal(e))
+	return err
 }
 
 func (s *Store) appendAudit(ctx context.Context, scope string, e AuditEntry) error {

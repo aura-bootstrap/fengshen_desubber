@@ -308,7 +308,8 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("re-submit should be ErrTaskState: %v", err)
 	}
 	got, _ := st.GetTask(ctx, t1.ID)
-	if got.Status != TaskProcessing || got.Provider != "las" || got.DurationSec != 50 || got.Cost != 1 ||
+	if got.Status != TaskProcessing || got.Provider != "las" || got.DurationSec != 50 ||
+		got.EstimatedCost != 1 || got.Cost != 1 || !got.Charged || got.BalanceAfter == nil || *got.BalanceAfter != 9 ||
 		got.SubmittedAt == 0 || got.SourceName != "样片.mp4" || got.SourcePath != `D:\视频\样片.mp4` {
 		t.Fatalf("processing task: %+v", got)
 	}
@@ -349,27 +350,52 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Fatalf("failed task: %+v", ft)
 	}
 
+	// 余额不足:同一条记录保留拟扣费，但明确未扣费。
+	t3 := &Task{ID: "task-" + code[:8] + "-3", CardID: c.ID, SrcKey: "input/c.mp4"}
+	if err := st.CreateUploadingTask(ctx, t3); err != nil {
+		t.Fatalf("CreateUploadingTask t3: %v", err)
+	}
+	if _, err := st.SubmitTaskWithDebit(ctx, t3.ID, 120, 20); !errors.Is(err, ErrInsufficientBalance) {
+		t.Fatalf("insufficient debit: %v", err)
+	}
+	insufficient, _ := st.GetTask(ctx, t3.ID)
+	if insufficient.Status != TaskUploading || insufficient.DurationSec != 120 ||
+		insufficient.EstimatedCost != 20 || insufficient.Cost != 0 || insufficient.Charged {
+		t.Fatalf("insufficient task snapshot: %+v", insufficient)
+	}
+
 	audit, err := st.AuditList(ctx)
 	if err != nil {
 		t.Fatalf("AuditList tasks: %v", err)
 	}
-	actions := map[string]int{}
+	taskAudits := map[string]map[string]any{}
 	for _, entry := range audit {
-		if entry["scope"] != "task" {
-			continue
-		}
-		action, _ := entry["action"].(string)
-		actions[action]++
-		if entry["task_id"] == t1.ID && action == "task_debited" {
-			if entry["source_path"] != `D:\视频\样片.mp4` || entry["duration_sec"] != float64(50) ||
-				entry["cost"] != float64(1) || entry["machine_hash"] != machine || entry["balance_after"] != float64(9) {
-				t.Fatalf("debit audit incomplete: %#v", entry)
-			}
+		if entry["scope"] == "task" {
+			taskAudits[entry["task_id"].(string)] = entry
 		}
 	}
-	if actions["task_created"] != 2 || actions["task_debited"] != 2 ||
-		actions["task_completed"] != 1 || actions["task_failed"] != 1 {
-		t.Fatalf("task audit actions: %#v", actions)
+	if len(taskAudits) != 3 {
+		t.Fatalf("want one audit snapshot per task, got %#v", taskAudits)
+	}
+	completed := taskAudits[t1.ID]
+	if completed["action"] != "task_completed" || completed["status"] != TaskCompleted ||
+		completed["source_path"] != `D:\视频\样片.mp4` || completed["duration_sec"] != float64(50) ||
+		completed["estimated_cost"] != float64(1) || completed["cost"] != float64(1) ||
+		completed["charged"] != true || completed["machine_hash"] != machine ||
+		completed["balance_after"] != float64(9) || completed["updated_at"] == nil {
+		t.Fatalf("completed audit incomplete: %#v", completed)
+	}
+	failed := taskAudits[t2.ID]
+	if failed["action"] != "task_failed" || failed["status"] != TaskFailed ||
+		failed["estimated_cost"] != float64(2) || failed["charged"] != true ||
+		failed["balance_after"] != float64(9) {
+		t.Fatalf("failed audit incomplete: %#v", failed)
+	}
+	debitFailed := taskAudits[t3.ID]
+	if debitFailed["action"] != "task_debit_failed" || debitFailed["status"] != TaskUploading ||
+		debitFailed["estimated_cost"] != float64(20) || debitFailed["charged"] != nil ||
+		debitFailed["balance_after"] != float64(9) {
+		t.Fatalf("debit-failed audit incomplete: %#v", debitFailed)
 	}
 }
 

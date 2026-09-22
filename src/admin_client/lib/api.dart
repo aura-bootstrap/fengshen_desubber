@@ -36,6 +36,7 @@ class CardInfo {
 
 class AuditEntry {
   final int ts;
+  final int updatedAt;
   final String scope;
   final String actor;
   final String action;
@@ -50,13 +51,16 @@ class AuditEntry {
   final String sourceName;
   final String sourcePath;
   final int durationSec;
+  final int estimatedCost;
   final int cost;
+  final bool charged;
   final int? balanceAfter;
   final String status;
   final String error;
 
   AuditEntry.fromJson(Map<String, dynamic> m)
       : ts = m['ts'] as int? ?? 0,
+        updatedAt = m['updated_at'] as int? ?? 0,
         scope = m['scope'] as String? ?? '',
         actor = m['actor'] as String? ?? '',
         action = m['action'] as String? ?? '',
@@ -71,7 +75,9 @@ class AuditEntry {
         sourceName = m['source_name'] as String? ?? '',
         sourcePath = m['source_path'] as String? ?? '',
         durationSec = m['duration_sec'] as int? ?? 0,
+        estimatedCost = m['estimated_cost'] as int? ?? 0,
         cost = m['cost'] as int? ?? 0,
+        charged = m['charged'] as bool? ?? false,
         balanceAfter = m['balance_after'] as int?,
         status = m['status'] as String? ?? '',
         error = m['error'] as String? ?? '';

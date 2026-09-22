@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -15,29 +17,49 @@ class AuditPage extends StatefulWidget {
 class _AuditPageState extends State<AuditPage> {
   List<AuditEntry>? _entries;
   String _error = '';
+  Timer? _refreshTimer;
+  bool _loading = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
+    if (_loading) return;
+    _loading = true;
     try {
       final list = await widget.api.audit();
-      list.sort((a, b) => b.ts.compareTo(a.ts));
+      list.sort((a, b) {
+        final aTime = a.updatedAt == 0 ? a.ts : a.updatedAt;
+        final bTime = b.updatedAt == 0 ? b.ts : b.updatedAt;
+        return bTime.compareTo(aTime);
+      });
+      if (!mounted) return;
       setState(() {
         _entries = list;
         _error = '';
       });
     } catch (e) {
-      setState(() => _error = '$e');
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      _loading = false;
     }
   }
 
   String _actionLabel(String action) => switch (action) {
         'task_created' => '创建任务',
-        'task_debited' => '扣费提交',
+        'task_submitting' => '准备扣费',
+        'task_debit_failed' => '扣费失败',
+        'task_debited' => '已扣费提交',
         'task_completed' => '处理完成',
         'task_failed' => '处理失败/退款',
         _ => action,
@@ -104,13 +126,16 @@ class _AuditPageState extends State<AuditPage> {
                                 columnSpacing: 24,
                                 horizontalMargin: 16,
                                 columns: const [
-                                  DataColumn(label: Text('时间')),
+                                  DataColumn(label: Text('发生时间')),
+                                  DataColumn(label: Text('更新时间')),
                                   DataColumn(label: Text('事件')),
-                                  DataColumn(label: Text('状态')),
+                                  DataColumn(label: Text('任务状态')),
                                   DataColumn(label: Text('任务 ID')),
                                   DataColumn(label: Text('文件路径')),
                                   DataColumn(label: Text('时长')),
-                                  DataColumn(label: Text('扣费')),
+                                  DataColumn(label: Text('拟扣费')),
+                                  DataColumn(label: Text('是否扣费')),
+                                  DataColumn(label: Text('实扣点数')),
                                   DataColumn(label: Text('扣后余额')),
                                   DataColumn(label: Text('机器号')),
                                   DataColumn(label: Text('卡号')),
@@ -122,6 +147,9 @@ class _AuditPageState extends State<AuditPage> {
                                   for (final e in _entries!)
                                     DataRow(cells: [
                                       DataCell(Text(fmtTs(e.ts))),
+                                      DataCell(Text(e.updatedAt == 0
+                                          ? ''
+                                          : fmtTs(e.updatedAt))),
                                       DataCell(Text(_actionLabel(e.action))),
                                       DataCell(Text(e.status)),
                                       DataCell(SelectableText(e.taskId.isEmpty
@@ -134,6 +162,12 @@ class _AuditPageState extends State<AuditPage> {
                                             : e.sourcePath),
                                       )),
                                       DataCell(Text(_duration(e.durationSec))),
+                                      DataCell(Text(e.estimatedCost == 0
+                                          ? ''
+                                          : '${e.estimatedCost} 点')),
+                                      DataCell(Text(e.scope == 'task'
+                                          ? (e.charged ? '是' : '否')
+                                          : '')),
                                       DataCell(Text(e.cost == 0 ? '' : '${e.cost} 点')),
                                       DataCell(Text(e.balanceAfter?.toString() ?? '')),
                                       DataCell(SizedBox(

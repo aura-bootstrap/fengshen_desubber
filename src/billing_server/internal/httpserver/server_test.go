@@ -349,19 +349,21 @@ func TestFullFlowSuccess(t *testing.T) {
 	if err := json.Unmarshal(b, &auditResp); err != nil {
 		t.Fatal(err)
 	}
-	foundCompleted := false
+	foundCompleted := 0
 	for _, entry := range auditResp.Audit {
-		if entry["task_id"] == taskID && entry["action"] == "task_completed" {
-			foundCompleted = true
-			if entry["source_path"] != `D:\视频\v.mp4` || entry["duration_sec"] != float64(65) ||
-				entry["cost"] != float64(2) || entry["machine_hash"] != e.machine ||
-				entry["provider"] == "" || entry["status"] != "completed" {
+		if entry["task_id"] == taskID {
+			foundCompleted++
+			if entry["action"] != "task_completed" || entry["source_path"] != `D:\视频\v.mp4` ||
+				entry["duration_sec"] != float64(65) || entry["estimated_cost"] != float64(2) ||
+				entry["cost"] != float64(2) || entry["charged"] != true ||
+				entry["machine_hash"] != e.machine || entry["provider"] == "" ||
+				entry["status"] != "completed" || entry["updated_at"] == nil {
 				t.Fatalf("completed audit incomplete: %#v", entry)
 			}
 		}
 	}
-	if !foundCompleted {
-		t.Fatalf("completed audit not found: %#v", auditResp.Audit)
+	if foundCompleted != 1 {
+		t.Fatalf("want one completed audit snapshot, got %d: %#v", foundCompleted, auditResp.Audit)
 	}
 }
 
