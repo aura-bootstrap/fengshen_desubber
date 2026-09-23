@@ -5,7 +5,7 @@
 .DESCRIPTION
   发布流程的服务端步骤。流程:交叉编译 cmd/lambda(GOOS=linux GOARCH=arm64)→
   打 function.zip(仅 bootstrap,zip 根)→ aws lambda update-function-code →
-  等待生效并打印 CodeSha256 → 探活 Function URL(未授权 /v1/balance 应回 401)。
+  等待生效并打印 CodeSha256 → 探活 Function URL(未授权 /v1/account 应回 401)。
 
   仅用于日常代码热更;首部署或 template.yaml 变更走 aws cloudformation deploy。
   Function URL 不入库,由 get-function-url-config 现查。
@@ -76,12 +76,12 @@ $url = & aws lambda get-function-url-config --function-name $Function --region $
     --query 'FunctionUrl' --output text
 if ($LASTEXITCODE -eq 0 -and $url -match '^https://') {
   try {
-    $null = Invoke-WebRequest -Uri ($url.TrimEnd('/') + '/v1/balance') -Method Get -TimeoutSec 15
-    Write-Host 'WARN: /v1/balance 无令牌未回 401,检查鉴权!' -ForegroundColor Yellow
+    $null = Invoke-WebRequest -Uri ($url.TrimEnd('/') + '/v1/account') -Method Get -TimeoutSec 15
+    Write-Host 'WARN: /v1/account 无令牌未回 401,检查鉴权!' -ForegroundColor Yellow
   } catch {
     $code = [int]$_.Exception.Response.StatusCode
     if ($code -eq 401) {
-      Write-Host '== 探活正常: /v1/balance 无令牌 401' -ForegroundColor Green
+      Write-Host '== 探活正常: /v1/account 无令牌 401' -ForegroundColor Green
     } else {
       Write-Host "WARN: 探活返回 $code(预期 401),请人工复核" -ForegroundColor Yellow
     }

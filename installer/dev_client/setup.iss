@@ -4,7 +4,7 @@
 ; 产物: installer\dev_client\output\峰神·去字幕-开发版-v1.0.2-installer.exe
 
 #define MyAppName "峰神·去字幕(开发版)"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.0.4"
 #define MyAppPublisher "峰神引擎"
 #define MyAppExeName "峰神引擎-字幕去除器-开发版.exe"
 
@@ -40,7 +40,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 [Files]
 ; 排除运行时产物(单实例锁/本地配置/任务库/工作区),只打程序与资源
 Source: "release\dev_client\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; \
-  Excludes: "app.lock,config.json,tasks.db*,workspace\*,logs\*,*.log"
+  Excludes: "app.lock,cloudauth.json,config.json,tasks.db*,workspace\*,logs\*,*.log"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
