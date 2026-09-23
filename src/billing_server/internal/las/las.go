@@ -24,7 +24,8 @@ func New(baseURL, apiKey, operatorID, operatorVersion string) *Client {
 		apiKey:          apiKey,
 		operatorID:      operatorID,
 		operatorVersion: operatorVersion,
-		hc:              &http.Client{Timeout: 5 * time.Minute},
+		// 单次调用必须在 Lambda 函数预算内返回;跨境链路劣化时挂死整函数(30s timeout)。
+		hc: &http.Client{Timeout: 20 * time.Second},
 	}
 }
 

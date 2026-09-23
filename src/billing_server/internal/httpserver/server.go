@@ -400,8 +400,10 @@ func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
 	}
 	lasID, err := p.Operator.Submit(r.Context(), getURL, t.ID)
 	if err != nil {
-		s.cleanupTOS(r, p, t)
-		if ferr := s.st.FailTaskWithRefund(r.Context(), t.ID, "las submit: "+err.Error()); ferr != nil {
+		s.cleanupTOS(p, t)
+		ctx, cancel := failCtx()
+		defer cancel()
+		if ferr := s.st.FailTaskWithRefund(ctx, t.ID, "las submit: "+err.Error()); ferr != nil {
 			log.Printf("task %s fail: %v", t.ID, ferr)
 		}
 		writeErr(w, http.StatusBadGateway, "las submit: "+err.Error())
@@ -437,12 +439,19 @@ func (s *Server) ownTask(w http.ResponseWriter, r *http.Request) (*ddbstore.Task
 	return t, true
 }
 
+// failCtx 终态结算/清理用独立短超时上下文:不随请求取消,也不耗尽函数预算。
+func failCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 8*time.Second)
+}
+
 // cleanupTOS 删除任务的 TOS 临时输入视频;失败仅记日志(桶生命周期兜底)。
-func (s *Server) cleanupTOS(r *http.Request, p provider.Provider, t *ddbstore.Task) {
+func (s *Server) cleanupTOS(p provider.Provider, t *ddbstore.Task) {
 	if t.SrcKey == "" {
 		return
 	}
-	if err := p.Uploader.Delete(r.Context(), t.SrcKey); err != nil {
+	ctx, cancel := failCtx()
+	defer cancel()
+	if err := p.Uploader.Delete(ctx, t.SrcKey); err != nil {
 		log.Printf("task %s delete tos %s: %v", t.ID, t.SrcKey, err)
 	}
 }
@@ -467,15 +476,19 @@ func (s *Server) advanceTask(r *http.Request, t *ddbstore.Task) *ddbstore.Task {
 			!errors.Is(err, ddbstore.ErrInsufficientBalance) {
 			log.Printf("task %s settle: %v", t.ID, err)
 		}
-		s.cleanupTOS(r, p, t)
+		s.cleanupTOS(p, t)
 	case status == "FAILED":
-		s.cleanupTOS(r, p, t)
-		if err := s.st.FailTaskWithRefund(r.Context(), t.ID, "las failed: "+errMsg); err != nil {
+		s.cleanupTOS(p, t)
+		ctx, cancel := failCtx()
+		defer cancel()
+		if err := s.st.FailTaskWithRefund(ctx, t.ID, "las failed: "+errMsg); err != nil {
 			log.Printf("task %s fail: %v", t.ID, err)
 		}
 	case time.Since(time.Unix(t.UpdatedAt, 0)) > pollTimeout:
-		s.cleanupTOS(r, p, t)
-		if err := s.st.FailTaskWithRefund(r.Context(), t.ID, "poll timeout"); err != nil {
+		s.cleanupTOS(p, t)
+		ctx, cancel := failCtx()
+		defer cancel()
+		if err := s.st.FailTaskWithRefund(ctx, t.ID, "poll timeout"); err != nil {
 			log.Printf("task %s timeout-fail: %v", t.ID, err)
 		}
 	}
