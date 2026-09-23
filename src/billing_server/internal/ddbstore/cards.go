@@ -37,7 +37,8 @@ func (s *Store) AllocateBatch(ctx context.Context, batch string) (string, error)
 		}
 		cur, exists := int64(0), !rv.Empty()
 		if exists {
-			cur, err = strconv.ParseInt(rv.String(), 10, 64)
+			// 计数器存的是 IntValue(N 型);String() 不转换数字,必须 IntE 读取。
+			cur, err = rv.IntE()
 			if err != nil {
 				return "", err
 			}
