@@ -26,7 +26,7 @@ func newFakeServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *[
 	t.Helper()
 	var seen []*http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/tos/") {
+		if !strings.HasPrefix(r.URL.Path, "/tos/") && r.URL.Path != "/result.mp4" {
 			if got := r.Header.Get("Authorization"); got != "Bearer "+testCard {
 				t.Errorf("Authorization 头错误: %q", got)
 			}
@@ -45,26 +45,27 @@ func newTestClient(srv *httptest.Server) *Client {
 	return New(srv.URL+"/", testCard, testHash) // 尾斜杠应被归一化
 }
 
-func TestActivateOK(t *testing.T) {
+func TestRedeemCardOK(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/activate" || r.Method != http.MethodPost {
+		if r.URL.Path != "/v1/cards/redeem" || r.Method != http.MethodPost {
 			t.Errorf("意外请求: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"credits": 120, "machine_hash": testHash, "status": "active",
+			"status":  "redeemed",
+			"account": map[string]any{"machine_hash": testHash, "balance": 120},
 		})
 	})
-	resp, err := newTestClient(srv).Activate(context.Background())
+	resp, err := newTestClient(srv).RedeemCard(context.Background())
 	if err != nil {
-		t.Fatalf("Activate: %v", err)
+		t.Fatalf("RedeemCard: %v", err)
 	}
-	if resp.Credits != 120 || resp.Status != "active" || resp.MachineHash != testHash {
-		t.Fatalf("激活响应不符: %+v", resp)
+	if resp.Account.Balance != 120 || resp.Status != "redeemed" || resp.Account.MachineHash != testHash {
+		t.Fatalf("核销响应不符: %+v", resp)
 	}
 }
 
-func TestActivateErrorMapping(t *testing.T) {
+func TestRedeemCardErrorMapping(t *testing.T) {
 	cases := []struct {
 		name   string
 		status int
@@ -82,7 +83,7 @@ func TestActivateErrorMapping(t *testing.T) {
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.body)
 			})
-			_, err := newTestClient(srv).Activate(context.Background())
+			_, err := newTestClient(srv).RedeemCard(context.Background())
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want errors.Is %v", err, tc.want)
 			}
@@ -90,20 +91,22 @@ func TestActivateErrorMapping(t *testing.T) {
 	}
 }
 
-func TestBalanceOK(t *testing.T) {
+func TestAccountOK(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/balance" {
+		if r.URL.Path != "/v1/account" {
 			t.Errorf("意外路径: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]any{"credits": 88})
+		json.NewEncoder(w).Encode(map[string]any{
+			"account": map[string]any{"machine_hash": testHash, "balance": 88},
+		})
 	})
-	n, err := newTestClient(srv).Balance(context.Background())
-	if err != nil || n != 88 {
-		t.Fatalf("Balance = %d, %v; want 88, nil", n, err)
+	account, err := newTestClient(srv).Account(context.Background())
+	if err != nil || account.Balance != 88 || account.MachineHash != testHash {
+		t.Fatalf("Account = %+v, %v", account, err)
 	}
 }
 
-func TestBalanceErrorMapping(t *testing.T) {
+func TestAccountErrorMapping(t *testing.T) {
 	cases := []struct {
 		code string
 		want error
@@ -117,7 +120,7 @@ func TestBalanceErrorMapping(t *testing.T) {
 			w.WriteHeader(403)
 			json.NewEncoder(w).Encode(map[string]string{"code": tc.code, "error": tc.code})
 		})
-		if _, err := newTestClient(srv).Balance(context.Background()); !errors.Is(err, tc.want) {
+		if _, err := newTestClient(srv).Account(context.Background()); !errors.Is(err, tc.want) {
 			t.Fatalf("code %s: err = %v, want %v", tc.code, err, tc.want)
 		}
 	}
@@ -155,7 +158,8 @@ func TestCreateTaskStreamsUpload(t *testing.T) {
 		case r.URL.Path == "/v1/tasks/task-1/submit" && r.Method == http.MethodPost:
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"task_id": "task-1", "duration_sec": 12.5, "cost": 25, "balance": 95,
+				"task_id": "task-1", "duration_sec": 12.5, "cost": 25,
+				"account": map[string]any{"machine_hash": testHash, "balance": 95},
 			})
 		default:
 			t.Errorf("意外请求: %s %s", r.Method, r.URL.Path)
@@ -168,7 +172,8 @@ func TestCreateTaskStreamsUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if resp.TaskID != "task-1" || resp.Cost != 25 || resp.Balance != 95 || resp.DurationSec != 12.5 {
+	if resp.TaskID != "task-1" || resp.Cost != 25 || resp.Account.Balance != 95 ||
+		resp.Account.MachineHash != testHash || resp.DurationSec != 12.5 {
 		t.Fatalf("建单响应不符: %+v", resp)
 	}
 	if lastDone != int64(len(payload)) || totalSeen != int64(len(payload)) {
@@ -261,7 +266,10 @@ func TestGetTaskStatus(t *testing.T) {
 		if r.URL.Path != "/v1/tasks/task-9" {
 			t.Errorf("意外路径: %s", r.URL.Path)
 		}
-		out := map[string]any{"task_id": "task-9", "status": status, "duration_sec": 3, "cost": 6}
+		out := map[string]any{
+			"task_id": "task-9", "status": status, "duration_sec": 3, "cost": 6,
+			"account": map[string]any{"machine_hash": testHash, "balance": 77},
+		}
 		if status == "failed" {
 			out["error"] = "provider 内部错误"
 		}
@@ -270,7 +278,7 @@ func TestGetTaskStatus(t *testing.T) {
 	cli := newTestClient(srv)
 	status = "processing"
 	info, err := cli.GetTask(context.Background(), "task-9")
-	if err != nil || info.Status != "processing" {
+	if err != nil || info.Status != "processing" || info.Account.Balance != 77 {
 		t.Fatalf("GetTask = %+v, %v", info, err)
 	}
 	status = "failed"
@@ -288,9 +296,13 @@ func TestDownloadStreamsToDisk(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/tasks/task-1/download":
-			// 现协议:download 302 到算子侧成片地址,客户端须自动跟随
+			w.Header().Set("X-Machine-Account-Hash", testHash)
+			w.Header().Set("X-Machine-Account-Balance", "73")
 			http.Redirect(w, r, "/result.mp4", http.StatusFound)
 		case "/result.mp4":
+			if r.Header.Get("Authorization") != "" || r.Header.Get("X-Machine-Hash") != "" {
+				t.Errorf("成片第二跳不应携带计费凭据")
+			}
 			w.Header().Set("Content-Type", "video/mp4")
 			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			io.WriteString(w, payload)
@@ -300,9 +312,13 @@ func TestDownloadStreamsToDisk(t *testing.T) {
 	})
 	dst := filepath.Join(t.TempDir(), "out.mp4")
 	var lastDone, totalSeen int64 = -1, -1
-	if err := newTestClient(srv).Download(context.Background(), "task-1", dst,
-		func(done, total int64) { lastDone, totalSeen = done, total }); err != nil {
+	account, err := newTestClient(srv).Download(context.Background(), "task-1", dst,
+		func(done, total int64) { lastDone, totalSeen = done, total })
+	if err != nil {
 		t.Fatalf("Download: %v", err)
+	}
+	if account == nil || account.Balance != 73 || account.MachineHash != testHash {
+		t.Fatalf("download account = %+v", account)
 	}
 	if lastDone != int64(len(payload)) || totalSeen != int64(len(payload)) {
 		t.Fatalf("下载进度回调不符: done=%d total=%d, want %d", lastDone, totalSeen, len(payload))
@@ -323,7 +339,7 @@ func TestDownloadNotReady(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "task not completed"})
 	})
 	dst := filepath.Join(t.TempDir(), "out.mp4")
-	err := newTestClient(srv).Download(context.Background(), "task-1", dst, nil)
+	_, err := newTestClient(srv).Download(context.Background(), "task-1", dst, nil)
 	if !errors.Is(err, ErrTaskNotReady) {
 		t.Fatalf("err = %v, want ErrTaskNotReady", err)
 	}

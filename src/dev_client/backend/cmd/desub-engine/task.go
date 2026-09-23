@@ -3,7 +3,7 @@ package main
 // 任务体系:创建/运行/查询/删除 + 状态机。
 // 单槽位:同一时刻只跑一个 desub 进程,忙时入队(status=queued),结束自动调度下一个;
 // 手动停止出队为 stopped。运行即重跑(desub 无断点续跑)。
-// 与用户版差异:无卡密/在线分支,任务直接拉本地 desub.exe 子进程。
+// 与用户版差异:在线分支走管理员内部通道(cloudauth.json,不计点数),无卡密/余额概念。
 
 import (
 	"context"
@@ -67,12 +67,12 @@ func (s *server) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		params = string(pb)
 	}
 
-	// 创建期校验卡密与输出目录,尽早失败且不入库。
+	// 创建期校验云端凭据与输出目录,尽早失败且不入库。
 	var probe Config
 	if err := json.Unmarshal([]byte(params), &probe); err == nil {
 		if probe.Online.Enabled {
-			if _, err := cardkey.LoadKeyFile(s.exeDir); err != nil {
-				writeErr(w, http.StatusBadRequest, "在线去字幕需要先激活卡密(新建任务选在线引擎后激活)")
+			if _, err := cardkey.LoadCredential(s.exeDir); err != nil {
+				writeErr(w, http.StatusBadRequest, "在线去字幕需要先登录云端账号(新建任务选在线引擎后登录)")
 				return
 			}
 		}

@@ -8,9 +8,13 @@ import '../theme.dart';
 class CardKeyFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
-    final raw =
-        newValue.text.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final raw = newValue.text.toUpperCase().replaceAll(
+      RegExp(r'[^A-Z0-9]'),
+      '',
+    );
     final buf = StringBuffer();
     for (var i = 0; i < raw.length; i++) {
       if (i > 0 && i % 5 == 0) buf.write('-');
@@ -24,9 +28,7 @@ class CardKeyFormatter extends TextInputFormatter {
   }
 }
 
-/// 卡密激活对话框:只输卡号(计费服务地址写死在引擎二进制,同 slicer),
-/// 激活中 spinner,失败直接展示服务端返回的中文错误文案。
-/// 激活成功 pop(true),取消 pop(false)。
+/// 充值卡核销对话框：卡面用于向本机机器账户充值并保存后续请求凭据。
 Future<bool?> showCardKeyActivateDialog(BuildContext context, AppState state) {
   return showDialog<bool>(
     context: context,
@@ -63,7 +65,7 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
       _error = '';
     });
     try {
-      await widget.state.activateCardKey(_key.text.trim());
+      await widget.state.redeemCard(_key.text.trim());
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) {
@@ -80,18 +82,25 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
     final t = context.tokens;
     return AlertDialog(
       backgroundColor: t.surface,
-      title: Text('激活卡密',
-          style: TextStyle(
-              fontSize: 16, fontWeight: FontWeight.w700, color: t.ink)),
+      title: Text(
+        '激活 / 账户充值',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: t.ink,
+        ),
+      ),
       content: SizedBox(
         width: 420,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('输入发行方提供的卡号(形如 XXXXX-XXXXX-XXXXX-XXXXX)。激活后本机与该卡绑定,'
-                '在线去字幕按分钟扣点。',
-                style: TextStyle(fontSize: 12.5, color: t.dim)),
+            Text(
+              '输入发行方提供的充值卡号(形如 XXXXX-XXXXX-XXXXX-XXXXX)。核销后点数计入本机机器账户,'
+              '在线去字幕按分钟扣点。',
+              style: TextStyle(fontSize: 12.5, color: t.dim),
+            ),
             const SizedBox(height: 16),
             TextField(
               controller: _key,
@@ -99,10 +108,11 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
               enabled: !_busy,
               inputFormatters: [CardKeyFormatter()],
               style: TextStyle(
-                  fontSize: 15,
-                  letterSpacing: 1.5,
-                  fontFamily: 'monospace',
-                  color: t.ink),
+                fontSize: 15,
+                letterSpacing: 1.5,
+                fontFamily: 'monospace',
+                color: t.ink,
+              ),
               decoration: InputDecoration(
                 labelText: '卡号',
                 hintText: 'XXXXX-XXXXX-XXXXX-XXXXX',
@@ -115,8 +125,10 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
               const SizedBox(height: 14),
               Container(
                 width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: t.dangerSoft,
                   borderRadius: BorderRadius.circular(8),
@@ -127,8 +139,10 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
                     Icon(Icons.error_outline, size: 15, color: t.danger),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(_error,
-                          style: TextStyle(fontSize: 12.5, color: t.danger)),
+                      child: Text(
+                        _error,
+                        style: TextStyle(fontSize: 12.5, color: t.danger),
+                      ),
                     ),
                   ],
                 ),
@@ -148,9 +162,10 @@ class _CardKeyActivateDialogState extends State<_CardKeyActivateDialog> {
               ? const SizedBox(
                   width: 14,
                   height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 2))
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : const Icon(Icons.key, size: 16),
-          label: Text(_busy ? '激活中…' : '激活'),
+          label: Text(_busy ? '核销中…' : '确认'),
         ),
       ],
     );

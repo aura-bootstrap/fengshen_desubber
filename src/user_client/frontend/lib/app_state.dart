@@ -19,47 +19,57 @@ class AppState extends ChangeNotifier {
   final Map<int, List<String>> logs = {};
   int? watchingTaskId;
 
-  /// 卡密状态(在线去字幕引擎);null = 尚未查询成功。
-  CardKeyStatus? cardKey;
-  bool cardKeyLoading = false;
-  String? cardKeyError;
+  /// 机器账户状态；余额只来自主动请求返回的服务端权威值。
+  MachineAccountStatus? machineAccount;
+  bool machineAccountLoading = false;
+  String? machineAccountError;
 
-  /// 拉取卡密状态;失败保留错误文案供界面展示重试。
-  Future<void> refreshCardKey() async {
-    cardKeyLoading = true;
-    cardKeyError = null;
+  Future<void> refreshMachineAccount() async {
+    machineAccountLoading = true;
+    machineAccountError = null;
+    if (machineAccount != null) {
+      machineAccount = MachineAccountStatus(
+        linked: machineAccount!.linked,
+        balance: null,
+        balanceAvailable: false,
+        machineHash: machineAccount!.machineHash,
+        degraded: machineAccount!.degraded,
+        error: '',
+      );
+    }
     notifyListeners();
     try {
-      cardKey = await client.cardkeyStatus();
+      machineAccount = await client.machineAccountStatus();
     } catch (e) {
-      debugPrint('[cardkey] status failed: $e');
-      cardKeyError = '$e';
+      debugPrint('[account] status failed: $e');
+      machineAccountError = '$e';
     }
-    cardKeyLoading = false;
+    machineAccountLoading = false;
     notifyListeners();
   }
 
-  /// 激活卡密,成功后刷新状态;失败原样上抛(ApiException 中文文案)。
-  Future<void> activateCardKey(String cardKey) async {
-    await client.activateCardKey(cardKey);
-    await refreshCardKey();
+  Future<void> redeemCard(String cardKey) async {
+    machineAccount = await client.redeemCard(cardKey);
+    machineAccountError = null;
+    notifyListeners();
   }
 
-  /// 解绑卡密,成功后刷新状态。
-  Future<void> deactivateCardKey() async {
-    await client.deactivateCardKey();
-    await refreshCardKey();
+  Future<void> clearAccountCredential() async {
+    await client.clearAccountCredential();
+    await refreshMachineAccount();
   }
 
   Future<void> boot(String engineExe) async {
     try {
-      debugPrint('[boot] engine exe: $engineExe exists=${File(engineExe).existsSync()}');
+      debugPrint(
+        '[boot] engine exe: $engineExe exists=${File(engineExe).existsSync()}',
+      );
       await client.start(engineExe);
       debugPrint('[boot] engine ready at ${client.baseUrl}');
       engineReady = true;
       await refresh();
-      // 侧栏授权卡片常驻,启动即拉一次卡密状态(未激活/失败都会在卡片上呈现)。
-      await refreshCardKey();
+      // 侧栏机器账户卡片常驻，启动即主动拉取一次权威余额。
+      await refreshMachineAccount();
       _sub = client.events().listen(_onEvent, onError: (_) {});
       notifyListeners();
     } catch (e) {
@@ -83,18 +93,40 @@ class AppState extends ChangeNotifier {
     // 任何事件都可能改变列表(进度/状态),轻量刷新:progress 高频,
     // 只打本地补丁;stage/queue/done 走全量刷新。
     switch (ev.type) {
+      case 'account':
+        final current = machineAccount;
+        if (current != null && ev.balance != null) {
+          machineAccount = MachineAccountStatus(
+            linked: current.linked,
+            balance: ev.balance,
+            balanceAvailable: true,
+            machineHash: current.machineHash,
+            degraded: current.degraded,
+            error: '',
+          );
+          machineAccountError = null;
+        }
+        notifyListeners();
       case 'progress':
         final i = tasks.indexWhere((t) => t.id == ev.taskId);
         if (i >= 0) {
           final t = tasks[i];
           tasks[i] = DesubTask(
-            id: t.id, name: t.name, srcPath: t.srcPath, outName: t.outName,
-            paramsJson: t.paramsJson, status: t.status,
+            id: t.id,
+            name: t.name,
+            srcPath: t.srcPath,
+            outName: t.outName,
+            paramsJson: t.paramsJson,
+            status: t.status,
             // 在线链路 progress 带 stage(upload/download);本地管线空值=repair 帧计数
             stage: ev.stage.isNotEmpty ? ev.stage : 'repair',
-            done: ev.done, total: ev.total, workDir: t.workDir,
-            reportJson: t.reportJson, error: t.error,
-            createdAt: t.createdAt, updatedAt: t.updatedAt,
+            done: ev.done,
+            total: ev.total,
+            workDir: t.workDir,
+            reportJson: t.reportJson,
+            error: t.error,
+            createdAt: t.createdAt,
+            updatedAt: t.updatedAt,
           );
         }
         notifyListeners();

@@ -80,13 +80,16 @@ func (s *Store) casTask(ctx context.Context, t *Task, mutate func(*Task)) (bool,
 }
 
 // CreateUploadingTask 建单（不扣点）：任务置 uploading，等客户端直传 TOS 后 submit。
+// CardID=0 表示开发版管理员内部任务：只记录机器码归因，不绑定卡账户。
 func (s *Store) CreateUploadingTask(ctx context.Context, t *Task) error {
-	c, err := s.GetCardByID(ctx, t.CardID)
-	if err != nil {
-		return err
+	if t.CardID != 0 {
+		c, err := s.GetCardByID(ctx, t.CardID)
+		if err != nil {
+			return err
+		}
+		t.MachineHash = c.MachineHash
+		t.CardHash = c.Hash
 	}
-	t.MachineHash = c.MachineHash
-	t.CardHash = c.Hash
 	t.Status = TaskUploading
 	now := s.Now().Unix()
 	t.CreatedAt, t.UpdatedAt = now, now
@@ -111,9 +114,13 @@ func (s *Store) StartTask(ctx context.Context, taskID string) (int64, error) {
 	if t.Status != TaskUploading {
 		return 0, ErrTaskState
 	}
-	m, err := s.GetMachine(ctx, t.MachineHash)
-	if err != nil || m.Balance < 1 {
-		return 0, ErrInsufficientBalance
+	balance := int64(0)
+	if t.CardID != 0 {
+		m, err := s.GetMachine(ctx, t.MachineHash)
+		if err != nil || m.Balance < 1 {
+			return 0, ErrInsufficientBalance
+		}
+		balance = m.Balance
 	}
 	ok, err := s.casTask(ctx, t, func(n *Task) { n.Status = TaskProcessing })
 	if err != nil {
@@ -122,7 +129,7 @@ func (s *Store) StartTask(ctx context.Context, taskID string) (int64, error) {
 	if !ok {
 		return 0, ErrTaskState
 	}
-	return m.Balance, nil
+	return balance, nil
 }
 
 func (s *Store) FinalizeTaskWithDebit(ctx context.Context, taskID string, durationSec, cost int64, resultURL string) (int64, error) {
@@ -132,6 +139,21 @@ func (s *Store) FinalizeTaskWithDebit(ctx context.Context, taskID string, durati
 	}
 	if t.Status != TaskProcessing {
 		return 0, ErrTaskState
+	}
+	if t.CardID == 0 {
+		ok, err := s.casTask(ctx, t, func(n *Task) {
+			n.Status = TaskCompleted
+			n.DurationSec = durationSec
+			n.Cost = 0
+			n.ResultURL = resultURL
+		})
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			return 0, ErrTaskState
+		}
+		return 0, nil
 	}
 	ok, err := s.casTask(ctx, t, func(n *Task) {
 		n.Status = TaskSettling
@@ -196,7 +218,7 @@ func (s *Store) FailTaskWithRefund(ctx context.Context, taskID, errMsg string) e
 	if !ok {
 		return errors.New("fail task: cas conflict")
 	}
-	if wasProcessing && t.MachineHash != "" {
+	if wasProcessing && t.CardID != 0 && t.MachineHash != "" && t.Cost > 0 {
 		if _, err := s.CreditMachine(ctx, t.MachineHash, t.Cost, "refund", t.ID, t.CardID); err != nil {
 			log.Printf("task %s refund failed: %v", t.ID, err)
 		}

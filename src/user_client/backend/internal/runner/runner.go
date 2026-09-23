@@ -21,12 +21,13 @@ import (
 // Event mirrors the engine's SSE event; duplicated here to keep the runner
 // package free of the server package.
 type Event struct {
-	Type   string
-	Stage  string
-	Done   int
-	Total  int
-	Msg    string
-	Status string
+	Type    string
+	Stage   string
+	Done    int
+	Total   int
+	Msg     string
+	Status  string
+	Balance *int
 }
 
 type DockerOptions struct {

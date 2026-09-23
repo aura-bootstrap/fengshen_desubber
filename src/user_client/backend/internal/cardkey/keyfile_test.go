@@ -1,6 +1,7 @@
 package cardkey
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"runtime"
@@ -19,7 +20,7 @@ func TestKeyFileRoundtrip(t *testing.T) {
 	}
 	want := &KeyFile{
 		Server: "https://billing.example.com", CardKey: "ABCDE-FGHIJ-KLMNO",
-		MachineHash: strings.Repeat("A", 64), Credits: 88, ActivatedAt: 1700000000,
+		MachineHash: strings.Repeat("A", 64), ActivatedAt: 1700000000,
 	}
 	if err := SaveKeyFile(dir, want); err != nil {
 		t.Fatalf("SaveKeyFile: %v", err)
@@ -36,6 +37,20 @@ func TestKeyFileRoundtrip(t *testing.T) {
 	}
 	if _, err := LoadKeyFile(dir); !errors.Is(err, ErrNotActivated) {
 		t.Fatalf("清除后应返回 ErrNotActivated, got %v", err)
+	}
+}
+
+func TestKeyFileIgnoresLegacyCreditsAndDoesNotPersistThem(t *testing.T) {
+	var kf KeyFile
+	if err := json.Unmarshal([]byte(`{"server":"https://billing.example.com","card_key":"K","machine_hash":"H","credits":88,"activated_at":1}`), &kf); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(kf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "credits") {
+		t.Fatalf("KeyFile 不应持久化余额: %s", data)
 	}
 }
 

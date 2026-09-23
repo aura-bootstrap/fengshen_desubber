@@ -66,7 +66,7 @@ type OutputConfig struct {
 }
 
 // OnlineConfig 云端去字幕:enabled 由创建/重跑的引擎选择写入任务快照(替代本地管线);
-// server 为计费服务地址(激活请求缺省取此值,激活后随 cardkey.json 固化)。
+// server 为云端任务服务地址(登录缺省取此值,管理员账号/密码存 cloudauth.json 不进配置快照)。
 type OnlineConfig struct {
 	Enabled bool   `json:"enabled"`
 	Server  string `json:"server"`

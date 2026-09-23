@@ -34,7 +34,7 @@ func (d *dockerRunner) Run(ctx context.Context, tk *store.Task, events chan<- Ev
 		for ev := range ch {
 			events <- Event{
 				Type: ev.Type, Stage: ev.Stage, Done: ev.Done,
-				Total: ev.Total, Msg: ev.Msg, Status: ev.Status,
+				Total: ev.Total, Msg: ev.Msg, Status: ev.Status, Balance: ev.Balance,
 			}
 		}
 	}()

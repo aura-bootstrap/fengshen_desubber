@@ -37,6 +37,14 @@ func xferProgress(stage string, events chan<- Event) billing.ProgressFn {
 	}
 }
 
+func emitAccount(events chan<- Event, account *billing.MachineAccount) {
+	if account == nil {
+		return
+	}
+	balance := account.Balance
+	events <- Event{Type: "account", Balance: &balance}
+}
+
 // runOnline 在线去字幕主流程。ctx 取消(用户停止任务)会中断上传/轮询/下载。
 func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName, provider string, events chan<- Event) error {
 	kf, err := cardkey.LoadKeyFile(keyDir)
@@ -55,16 +63,14 @@ func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName, provider 
 	if err != nil {
 		return fmt.Errorf("云端建单失败: %s", billing.Message(err))
 	}
+	emitAccount(events, &created.Account)
 	if created.Cost == 0 {
 		events <- Event{Type: "log", Msg: fmt.Sprintf("云端任务 %s 已提交，处理完成后按实际时长结算", created.TaskID)}
 	} else {
 		events <- Event{Type: "log", Msg: fmt.Sprintf(
-			"云端任务 %s 已创建(时长 %.1fs,扣点 %d,余额 %d)",
-			created.TaskID, created.DurationSec, created.Cost, created.Balance)}
+			"云端任务 %s 已创建(时长 %.1fs,扣点 %d,机器账户余额 %d)",
+			created.TaskID, created.DurationSec, created.Cost, created.Account.Balance)}
 	}
-	// 顺带刷新本地缓存余额(status 接口远端不可达时兜底显示)。
-	kf.Credits = created.Balance
-	_ = cardkey.SaveKeyFile(keyDir, kf)
 
 	// 2. 轮询云端状态直至 completed/failed/超时。
 	events <- Event{Type: "stage", Stage: "cloud"}
@@ -79,6 +85,7 @@ func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName, provider 
 			// 网络抖动不直接判失败:记日志,下一轮再试(上限仍受 6 小时约束)。
 			events <- Event{Type: "log", Msg: fmt.Sprintf("查询云端状态失败(稍后重试): %v", err)}
 		} else {
+			emitAccount(events, &info.Account)
 			switch info.Status {
 			case "failed":
 				if info.Error != "" {
@@ -108,9 +115,11 @@ download:
 	events <- Event{Type: "stage", Stage: "download"}
 	events <- Event{Type: "log", Msg: "云端处理完成,下载成片..."}
 	dst := filepath.Join(workDir, outName)
-	if err := cli.Download(ctx, created.TaskID, dst, xferProgress("download", events)); err != nil {
+	account, err := cli.Download(ctx, created.TaskID, dst, xferProgress("download", events))
+	if err != nil {
 		return fmt.Errorf("下载成片失败: %s", billing.Message(err))
 	}
+	emitAccount(events, account)
 	if _, err := os.Stat(dst); err != nil {
 		return fmt.Errorf("云端未产出 %s", outName)
 	}

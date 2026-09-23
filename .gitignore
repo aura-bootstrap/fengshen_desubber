@@ -2,6 +2,7 @@ bin/
 .kiro/
 src/user_client/backend/bin/
 src/dev_client/backend/*.exe
+src/user_client/backend/*.exe
 src/billing_server/dist/
 src/billing_server/bin/
 src/billing_server/*.exe

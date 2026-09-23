@@ -6,7 +6,8 @@ class DesubTask {
   final String outName;
   final String paramsJson;
   final String status; // pending|queued|running|succeeded|failed|stopped
-  final String stage; // 本地: probe|cuts|detect|repair|engine|verify;在线: upload|cloud|download
+  final String
+  stage; // 本地: probe|cuts|detect|repair|engine|verify;在线: upload|cloud|download
   final int done;
   final int total;
   final String workDir;
@@ -33,28 +34,35 @@ class DesubTask {
   });
 
   factory DesubTask.fromJson(Map<String, dynamic> j) => DesubTask(
-        id: (j['id'] as num).toInt(),
-        name: j['name'] as String? ?? '',
-        srcPath: j['src_path'] as String? ?? '',
-        outName: j['out_name'] as String? ?? '',
-        paramsJson: j['params_json'] as String? ?? '',
-        status: j['status'] as String? ?? '',
-        stage: j['stage'] as String? ?? '',
-        done: (j['done'] as num? ?? 0).toInt(),
-        total: (j['total'] as num? ?? 0).toInt(),
-        workDir: j['work_dir'] as String? ?? '',
-        reportJson: j['report_json'] as String? ?? '',
-        error: j['error'] as String? ?? '',
-        createdAt: DateTime.tryParse(j['created_at'] as String? ?? ''),
-        updatedAt: DateTime.tryParse(j['updated_at'] as String? ?? ''),
-      );
+    id: (j['id'] as num).toInt(),
+    name: j['name'] as String? ?? '',
+    srcPath: j['src_path'] as String? ?? '',
+    outName: j['out_name'] as String? ?? '',
+    paramsJson: j['params_json'] as String? ?? '',
+    status: j['status'] as String? ?? '',
+    stage: j['stage'] as String? ?? '',
+    done: (j['done'] as num? ?? 0).toInt(),
+    total: (j['total'] as num? ?? 0).toInt(),
+    workDir: j['work_dir'] as String? ?? '',
+    reportJson: j['report_json'] as String? ?? '',
+    error: j['error'] as String? ?? '',
+    createdAt: DateTime.tryParse(j['created_at'] as String? ?? ''),
+    updatedAt: DateTime.tryParse(j['updated_at'] as String? ?? ''),
+  );
 
   bool get active => status == 'running' || status == 'queued';
 
   /// 在线任务(params 快照 online:true)走云端三阶段,否则本地六阶段管线。
   bool get isOnline => paramsJson.contains('"online":true');
 
-  static const localStages = ['probe', 'cuts', 'detect', 'repair', 'engine', 'verify'];
+  static const localStages = [
+    'probe',
+    'cuts',
+    'detect',
+    'repair',
+    'engine',
+    'verify',
+  ];
   static const onlineStages = ['upload', 'cloud', 'download'];
   List<String> get stages => isOnline ? onlineStages : localStages;
 
@@ -78,17 +86,17 @@ class DesubTask {
   }
 
   static String labelOf(String stage) => switch (stage) {
-        'probe' => '探测',
-        'cuts' => '镜头切分',
-        'detect' => '字幕检测',
-        'repair' => '修复',
-        'engine' => '合成输出',
-        'verify' => '复检',
-        'upload' => '上传',
-        'cloud' => '云端处理',
-        'download' => '下载成片',
-        _ => '',
-      };
+    'probe' => '探测',
+    'cuts' => '镜头切分',
+    'detect' => '字幕检测',
+    'repair' => '修复',
+    'engine' => '合成输出',
+    'verify' => '复检',
+    'upload' => '上传',
+    'cloud' => '云端处理',
+    'download' => '下载成片',
+    _ => '',
+  };
 
   String get stageLabel {
     final l = labelOf(stage);
@@ -98,13 +106,14 @@ class DesubTask {
 }
 
 class EngineEvent {
-  final String type; // progress|stage|log|queue|done
+  final String type; // progress|stage|log|queue|done|account
   final int taskId;
   final String stage;
   final int done;
   final int total;
   final String msg;
   final String status;
+  final int? balance;
 
   const EngineEvent({
     required this.type,
@@ -114,44 +123,47 @@ class EngineEvent {
     this.total = 0,
     this.msg = '',
     this.status = '',
+    this.balance,
   });
 
   factory EngineEvent.fromJson(Map<String, dynamic> j) => EngineEvent(
-        type: j['type'] as String? ?? '',
-        taskId: (j['task_id'] as num? ?? 0).toInt(),
-        stage: j['stage'] as String? ?? '',
-        done: (j['done'] as num? ?? 0).toInt(),
-        total: (j['total'] as num? ?? 0).toInt(),
-        msg: j['msg'] as String? ?? '',
-        status: j['status'] as String? ?? '',
-      );
+    type: j['type'] as String? ?? '',
+    taskId: (j['task_id'] as num? ?? 0).toInt(),
+    stage: j['stage'] as String? ?? '',
+    done: (j['done'] as num? ?? 0).toInt(),
+    total: (j['total'] as num? ?? 0).toInt(),
+    msg: j['msg'] as String? ?? '',
+    status: j['status'] as String? ?? '',
+    balance: (j['balance'] as num?)?.toInt(),
+  );
 }
 
-/// 卡密状态(/api/cardkey/status),在线去字幕引擎使用。
-class CardKeyStatus {
-  final bool activated;
-  final String masked; // 脱敏卡号,形如 ABCDE…Z
-  final int credits; // 剩余点数
+/// 机器账户状态(/api/account/status)。充值卡只作为核销与请求凭据。
+class MachineAccountStatus {
+  final bool linked;
+  final int? balance;
+  final bool balanceAvailable;
   final String machineHash;
-  final bool degraded; // 引擎侧降级(如云端暂不可达,余额为缓存值)
-  final bool stale; // 状态缓存过期
+  final bool degraded;
+  final String error;
 
-  const CardKeyStatus({
-    required this.activated,
-    required this.masked,
-    required this.credits,
+  const MachineAccountStatus({
+    required this.linked,
+    required this.balance,
+    required this.balanceAvailable,
     required this.machineHash,
     required this.degraded,
-    required this.stale,
+    required this.error,
   });
 
-  factory CardKeyStatus.fromJson(Map<String, dynamic> j) => CardKeyStatus(
-        activated: j['activated'] as bool? ?? false,
-        masked: j['masked'] as String? ?? '',
-        credits: (j['credits'] as num? ?? 0).toInt(),
+  factory MachineAccountStatus.fromJson(Map<String, dynamic> j) =>
+      MachineAccountStatus(
+        linked: j['linked'] as bool? ?? false,
+        balance: (j['balance'] as num?)?.toInt(),
+        balanceAvailable: j['balance_available'] as bool? ?? false,
         machineHash: j['machine_hash'] as String? ?? '',
         degraded: j['degraded'] as bool? ?? false,
-        stale: j['stale'] as bool? ?? false,
+        error: j['error'] as String? ?? '',
       );
 }
 

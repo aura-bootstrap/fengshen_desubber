@@ -1,7 +1,8 @@
 // Command desub-engine is the local HTTP task service behind the desub
 // dev_client Flutter shell: config editing with history, a SQLite task
-// store, one-at-a-time local `desub` runs, and SSE progress. It never
-// talks to the billing server — the dev client is fully local.
+// store, one-at-a-time local `desub` runs, and SSE progress. Online tasks
+// use the billing server's admin-authenticated internal channel; the dev
+// client does not expose card or credit state.
 //
 // Handshake contract with the frontend (same as fengshen-slicer): started
 // with `-serve -port 0`, the first stdout line is `PORT=<n>`; the process
@@ -95,9 +96,9 @@ func main() {
 	mux.HandleFunc("POST /api/tasks/{id}/run", s.handleTaskRun)
 	mux.HandleFunc("POST /api/tasks/{id}/stop", s.handleTaskStop)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleTaskDelete)
-	mux.HandleFunc("GET /api/cardkey/status", s.handleCardkeyStatus)
-	mux.HandleFunc("POST /api/cardkey/activate", s.handleCardkeyActivate)
-	mux.HandleFunc("POST /api/cardkey/deactivate", s.handleCardkeyDeactivate)
+	mux.HandleFunc("GET /api/cloud/status", s.handleCloudStatus)
+	mux.HandleFunc("POST /api/cloud/login", s.handleCloudLogin)
+	mux.HandleFunc("DELETE /api/cloud/credential", s.handleClearCloudCredential)
 	mux.HandleFunc("GET /api/events", s.hub.handleSSE)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "task_mode": s.taskMode})

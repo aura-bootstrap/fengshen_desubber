@@ -5,7 +5,7 @@ import '../app_state.dart';
 import '../models.dart';
 import '../responsive.dart';
 import '../theme.dart';
-import '../widgets/cardkey_activate_dialog.dart';
+import '../widgets/cloud_login_dialog.dart';
 import '../widgets/top_toast.dart';
 
 /// 任务页:任务卡片列表 + 四步新建任务向导。
@@ -289,7 +289,7 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
   void _next() {
     if (!_canNext) return;
     if (_step + 1 == 2 && _engine == 'online') {
-      widget.state.refreshCardKey();
+      widget.state.refreshCloud();
     }
     setState(() => _step++);
   }
@@ -513,7 +513,7 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
                   ? null
                   : () {
                       setState(() => _engine = value);
-                      if (value == 'online') widget.state.refreshCardKey();
+                      if (value == 'online') widget.state.refreshCloud();
                     },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -547,7 +547,7 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
       ),
       if (_engine == 'online') ...[
         const SizedBox(height: 8),
-        _cardKeySection(t),
+        _cloudSection(t),
       ],
     ]);
   }
@@ -590,91 +590,92 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
     );
   }
 
-  /// 在线引擎下是否禁止创建:状态未取到/未激活/余额为 0。
+  /// 在线引擎下是否禁止创建:状态未取到/未配置凭据/凭据未通过远端验证。
   bool get _onlineBlocked {
     if (_engine != 'online') return false;
-    final ck = widget.state.cardKey;
-    return ck == null || !ck.activated || ck.credits <= 0;
+    final cs = widget.state.cloud;
+    return cs == null || !cs.linked || !cs.online;
   }
 
-  /// 卡密状态区(仅在线引擎展示),跟随 AppState 通知刷新。
-  Widget _cardKeySection(AppTokens t) {
+  /// 云端账号状态区(仅在线引擎展示),跟随 AppState 通知刷新。
+  Widget _cloudSection(AppTokens t) {
     return AnimatedBuilder(
       animation: widget.state,
       builder: (context, _) {
         final st = widget.state;
         Widget child;
-        if (st.cardKeyLoading && st.cardKey == null) {
+        if (st.cloudLoading && st.cloud == null) {
           child = Row(children: [
             const SizedBox(
                 width: 14,
                 height: 14,
                 child: CircularProgressIndicator(strokeWidth: 2)),
             const SizedBox(width: 8),
-            Text('正在查询卡密状态…',
+            Text('正在查询云端账号状态…',
                 style: TextStyle(fontSize: 12.5, color: t.dim)),
           ]);
-        } else if (st.cardKey == null) {
+        } else if (st.cloud == null) {
           // 状态查询失败(引擎未就绪):给重试入口。
           child = Row(children: [
             Icon(Icons.error_outline, size: 15, color: t.danger),
             const SizedBox(width: 6),
             Expanded(
-              child: Text('无法获取卡密状态:${st.cardKeyError ?? '未知错误'}',
+              child: Text('无法获取云端账号状态:${st.cloudError ?? '未知错误'}',
                   style: TextStyle(fontSize: 12.5, color: t.danger),
                   overflow: TextOverflow.ellipsis),
             ),
             TextButton(
-                onPressed: st.refreshCardKey, child: const Text('重试')),
+                onPressed: st.refreshCloud, child: const Text('重试')),
           ]);
-        } else if (!st.cardKey!.activated) {
+        } else if (!st.cloud!.linked) {
           child = Row(children: [
-            Icon(Icons.key_off, size: 15, color: t.warn),
+            Icon(Icons.cloud_off, size: 15, color: t.warn),
             const SizedBox(width: 6),
             Expanded(
-              child: Text('未激活卡密(在线去字幕按分钟扣点)',
+              child: Text('未登录云端账号(开发版内部通道,不计点数)',
                   style: TextStyle(fontSize: 12.5, color: t.dim),
                   overflow: TextOverflow.ellipsis),
             ),
             FilledButton.icon(
-              onPressed: _activateCard,
-              icon: const Icon(Icons.key, size: 15),
-              label: const Text('激活'),
+              onPressed: _loginCloud,
+              icon: const Icon(Icons.login, size: 15),
+              label: const Text('登录'),
             ),
           ]);
         } else {
-          final ck = st.cardKey!;
+          final cs = st.cloud!;
           child = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
-                Icon(Icons.key, size: 15, color: t.success),
+                Icon(cs.online ? Icons.cloud_done : Icons.cloud_off,
+                    size: 15, color: cs.online ? t.success : t.warn),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '卡 ${ck.masked} · 余额 ${ck.credits} 点 · ${ck.server}'
-                    '${ck.degraded || ck.stale ? '(状态为缓存,以服务端为准)' : ''}',
+                    '${cs.username} · ${cs.server}'
+                    '${cs.online ? '' : '(凭据未通过远端验证)'}',
                     style: TextStyle(fontSize: 12.5, color: t.ink),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                TextButton(onPressed: _activateCard, child: const Text('换卡')),
+                TextButton(onPressed: _loginCloud, child: const Text('换账号')),
                 TextButton(
-                  onPressed: _confirmDeactivate,
-                  child: Text('解绑', style: TextStyle(color: t.danger)),
+                  onPressed: _confirmClearCredential,
+                  child: Text('清除', style: TextStyle(color: t.danger)),
                 ),
               ]),
-              if (ck.error.isNotEmpty)
+              if (cs.error.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
-                  child: Text(ck.error,
+                  child: Text(cs.error,
                       style: TextStyle(fontSize: 12.5, color: t.danger)),
                 ),
-              if (ck.credits <= 0)
+              if (cs.degraded)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
-                  child: Text('余额不足,请充值后再创建在线任务',
-                      style: TextStyle(fontSize: 12.5, color: t.danger)),
+                  child: Text('机器码采集降级(仅凭网卡 MAC)',
+                      style: TextStyle(fontSize: 12.5, color: t.warn)),
                 ),
             ],
           );
@@ -693,31 +694,31 @@ class _NewTaskDialogState extends State<NewTaskDialog> {
     );
   }
 
-  /// 弹激活对话框(激活/换卡共用),成功后状态由 AppState 通知刷新。
-  Future<void> _activateCard() async {
-    await showCardKeyActivateDialog(context, widget.state);
+  /// 弹登录对话框(登录/换账号共用),成功后状态由 AppState 通知刷新。
+  Future<void> _loginCloud() async {
+    await showCloudLoginDialog(context, widget.state);
   }
 
-  /// 解绑卡密,二次确认。
-  Future<void> _confirmDeactivate() async {
+  /// 清除本机云端凭据,二次确认。
+  Future<void> _confirmClearCredential() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('解绑卡密'),
-        content: const Text('解绑后本机将不能再使用在线去字幕(远端绑定不解除,同卡可直接重新激活),确定解绑吗?'),
+        title: const Text('清除云端凭据'),
+        content: const Text('清除后本机将不能再使用在线去字幕(远端会话不吊销,可重新登录),确定清除吗?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
               child: const Text('取消')),
           FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('解绑')),
+              child: const Text('清除')),
         ],
       ),
     );
     if (ok != true) return;
     try {
-      await widget.state.deactivateCardKey();
+      await widget.state.clearCloudCredential();
     } catch (e) {
       if (mounted) TopToast.show(context, '$e', error: true);
     }

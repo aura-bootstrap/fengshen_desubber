@@ -13,7 +13,7 @@ Object? getPath(Map<String, dynamic> cfg, String path) {
 }
 
 /// 开发版引擎选择(创建/重跑任务选一个;映射到配置键,随任务快照固化)。
-/// 在线引擎走计费服务云端管线,需先在弹窗内激活卡密。
+/// 在线引擎走云端任务管线(内部通道不计点数),需先登录云端账号。
 /// diffueraser/wanvace 与 propainter 共用生成式管线(temporal+强制路由),
 /// 靠 enhance.painter 键换旁车脚本区分。
 const devEngineOptions = <String, String>{
@@ -289,12 +289,12 @@ final configPages = <ConfigPage>[
           hint: '真实像素覆盖率低于此值的事件标记为高风险'),
     ]),
   ]),
-  ConfigPage('online', '在线', '云端去字幕(按分钟扣点;需计费服务地址与卡密)', [
-    FieldGroup('云端管线', '在线去字幕开关与计费服务地址', [
+  ConfigPage('online', '在线', '云端去字幕(开发版内部通道,不计点数;需云端服务管理员账号)', [
+    FieldGroup('云端管线', '在线去字幕开关与云端服务地址', [
       FieldDef('online.enabled', '在线去字幕', FieldKind.bool,
           hint: '新建任务默认走云端管线;创建/重跑时的引擎选择优先于此值'),
-      FieldDef('online.server', '计费服务地址', FieldKind.text,
-          hint: '形如 http://127.0.0.1:18099;激活卡密时缺省取此值'),
+      FieldDef('online.server', '云端服务地址', FieldKind.text,
+          hint: '形如 http://127.0.0.1:18099;登录云端账号时缺省取此值'),
     ]),
   ]),
 ];
@@ -313,36 +313,33 @@ class TaskWindow {
   const TaskWindow(this.tasks, this.total);
 }
 
-/// 卡密状态(GET /api/cardkey/status);degraded/stale 时余额为本地缓存值。
-class CardKeyStatus {
-  final bool activated;
+/// 云端账号状态(GET /api/cloud/status);linked=本机已配置凭据,online=凭据已通过远端验证。
+class CloudStatus {
+  final bool linked;
+  final bool online;
   final String server;
-  final String masked; // 脱敏卡号,形如 ABCDE…Z
-  final int credits; // 剩余点数
+  final String username;
   final String machineHash;
   final bool degraded; // 引擎侧降级(机器码采集失败等)
-  final bool stale; // 远端不可达,状态为本地缓存
-  final String error; // 授权类错误文案(吊销/机器码不一致等)
+  final String error; // 远端验证失败或本地凭据无法读取的文案
 
-  const CardKeyStatus({
-    required this.activated,
+  const CloudStatus({
+    required this.linked,
+    required this.online,
     required this.server,
-    required this.masked,
-    required this.credits,
+    required this.username,
     required this.machineHash,
     required this.degraded,
-    required this.stale,
     required this.error,
   });
 
-  factory CardKeyStatus.fromJson(Map<String, dynamic> j) => CardKeyStatus(
-        activated: j['activated'] as bool? ?? false,
+  factory CloudStatus.fromJson(Map<String, dynamic> j) => CloudStatus(
+        linked: j['linked'] as bool? ?? false,
+        online: j['online'] as bool? ?? false,
         server: j['server'] as String? ?? '',
-        masked: j['masked'] as String? ?? '',
-        credits: (j['credits'] as num? ?? 0).toInt(),
+        username: j['username'] as String? ?? '',
         machineHash: j['machine_hash'] as String? ?? '',
         degraded: j['degraded'] as bool? ?? false,
-        stale: j['stale'] as bool? ?? false,
         error: j['error'] as String? ?? '',
       );
 }

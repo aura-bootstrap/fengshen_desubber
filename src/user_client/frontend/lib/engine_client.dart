@@ -28,11 +28,11 @@ class EngineClient {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      if (line.startsWith('PORT=') && !completer.isCompleted) {
-        baseUrl = 'http://127.0.0.1:${line.substring(5)}';
-        completer.complete();
-      }
-    });
+          if (line.startsWith('PORT=') && !completer.isCompleted) {
+            baseUrl = 'http://127.0.0.1:${line.substring(5)}';
+            completer.complete();
+          }
+        });
     _proc!.stderr.drain<void>();
     unawaited(_proc!.exitCode.then((_) => _proc = null));
     await completer.future.timeout(
@@ -65,8 +65,9 @@ class EngineClient {
     return list;
   }
 
-  Future<DesubTask> taskDetail(int id) async =>
-      DesubTask.fromJson(jsonDecode(await _get('/api/tasks/$id')) as Map<String, dynamic>);
+  Future<DesubTask> taskDetail(int id) async => DesubTask.fromJson(
+    jsonDecode(await _get('/api/tasks/$id')) as Map<String, dynamic>,
+  );
 
   Future<DesubTask> createTask({
     required String name,
@@ -75,15 +76,17 @@ class EngineClient {
     required Map<String, dynamic> params,
     required bool runNow,
   }) async {
-    final resp = await _http.post(_u('/api/tasks'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'name': name,
-          'src_path': srcPath,
-          'out_name': outName,
-          'params': params,
-          'run_now': runNow,
-        }));
+    final resp = await _http.post(
+      _u('/api/tasks'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'src_path': srcPath,
+        'out_name': outName,
+        'params': params,
+        'run_now': runNow,
+      }),
+    );
     if (resp.statusCode != 201) {
       throw ApiException(resp.statusCode, utf8.decode(resp.bodyBytes));
     }
@@ -94,23 +97,34 @@ class EngineClient {
   Future<void> runTask(int id) => _post('/api/tasks/$id/run');
   Future<void> stopTask(int id) => _post('/api/tasks/$id/stop');
 
-  /// 查询卡密状态(在线去字幕引擎)。
-  Future<CardKeyStatus> cardkeyStatus() async => CardKeyStatus.fromJson(
-      jsonDecode(await _get('/api/cardkey/status')) as Map<String, dynamic>);
+  /// 查询机器账户实时状态。
+  Future<MachineAccountStatus> machineAccountStatus() async =>
+      MachineAccountStatus.fromJson(
+        jsonDecode(await _get('/api/account/status')) as Map<String, dynamic>,
+      );
 
-  /// 激活卡密;失败抛 ApiException(toString 即服务端中文错误文案)。
-  /// 计费服务地址写死在引擎二进制里,前端只传卡号。
-  Future<void> activateCardKey(String cardKey) async {
-    final resp = await _http.post(_u('/api/cardkey/activate'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'card_key': cardKey}));
+  /// 核销充值卡并返回更新后的机器账户。
+  Future<MachineAccountStatus> redeemCard(String cardKey) async {
+    final resp = await _http.post(
+      _u('/api/cards/redeem'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'card_key': cardKey}),
+    );
     if (resp.statusCode != 200) {
       throw ApiException(resp.statusCode, utf8.decode(resp.bodyBytes));
     }
+    return MachineAccountStatus.fromJson(
+      jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>,
+    );
   }
 
-  /// 解绑卡密。
-  Future<void> deactivateCardKey() => _post('/api/cardkey/deactivate');
+  /// 删除本机保存的机器账户访问凭据。
+  Future<void> clearAccountCredential() async {
+    final resp = await _http.delete(_u('/api/account/credential'));
+    if (resp.statusCode >= 300) {
+      throw ApiException(resp.statusCode, utf8.decode(resp.bodyBytes));
+    }
+  }
 
   Future<void> _post(String path) async {
     final resp = await _http.post(_u(path));
@@ -147,7 +161,8 @@ class EngineClient {
           if (line.startsWith('data: ')) {
             try {
               yield EngineEvent.fromJson(
-                  jsonDecode(line.substring(6)) as Map<String, dynamic>);
+                jsonDecode(line.substring(6)) as Map<String, dynamic>,
+              );
             } catch (_) {}
           }
         }

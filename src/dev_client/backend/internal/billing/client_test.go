@@ -15,19 +15,18 @@ import (
 )
 
 const (
-	testCard = "ABCDE-FGHIJ-KLMNO-PQRST"
-	testHash = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	testToken = "dev-session.token"
+	testHash  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
 
-// newFakeServer 按计费契约起 httptest 假服务,返回 server 与请求记录。
-// handler 命中路由后自行写响应;公共头校验统一在这里做(/tos/ 直传路径免验,
-// 预签名 URL 自带凭证、不带计费鉴权头)。
+// newFakeServer 按云端内部任务契约起 httptest 假服务,返回 server 与请求记录。
+// /v1/admin/login、/tos/ 直传与 /result.mp4 第二跳免验统一任务头。
 func newFakeServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *[]*http.Request) {
 	t.Helper()
 	var seen []*http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/tos/") {
-			if got := r.Header.Get("Authorization"); got != "Bearer "+testCard {
+		if r.URL.Path != "/v1/admin/login" && !strings.HasPrefix(r.URL.Path, "/tos/") && r.URL.Path != "/result.mp4" {
+			if got := r.Header.Get("Authorization"); got != "Bearer "+testToken {
 				t.Errorf("Authorization 头错误: %q", got)
 			}
 			if got := r.Header.Get("X-Machine-Hash"); got != testHash {
@@ -42,89 +41,50 @@ func newFakeServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *[
 }
 
 func newTestClient(srv *httptest.Server) *Client {
-	return New(srv.URL+"/", testCard, testHash) // 尾斜杠应被归一化
+	return New(srv.URL+"/", testToken, testHash)
 }
 
-func TestActivateOK(t *testing.T) {
+func TestLoginOK(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/activate" || r.Method != http.MethodPost {
+		if r.URL.Path != "/v1/admin/login" || r.Method != http.MethodPost {
 			t.Errorf("意外请求: %s %s", r.Method, r.URL.Path)
 		}
-		w.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("登录请求解析失败: %v", err)
+		}
+		if body.Username != "root" || body.Password != "secret" {
+			t.Errorf("登录请求不符: %+v", body)
+		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"credits": 120, "machine_hash": testHash, "status": "active",
+			"token": testToken, "username": "root", "role": "root",
 		})
 	})
-	resp, err := newTestClient(srv).Activate(context.Background())
+	resp, err := Login(context.Background(), srv.URL+"/", "root", "secret")
 	if err != nil {
-		t.Fatalf("Activate: %v", err)
+		t.Fatalf("Login: %v", err)
 	}
-	if resp.Credits != 120 || resp.Status != "active" || resp.MachineHash != testHash {
-		t.Fatalf("激活响应不符: %+v", resp)
-	}
-}
-
-func TestActivateErrorMapping(t *testing.T) {
-	cases := []struct {
-		name   string
-		status int
-		body   string
-		want   error
-	}{
-		{"卡无效", 401, `{"error":"invalid card"}`, ErrCardInvalid},
-		{"卡吊销", 403, `{"code":"card_revoked","error":"revoked"}`, ErrCardRevoked},
-		{"绑定他机", 409, `{"code":"card_bound_other","error":"bound"}`, ErrBoundOther},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(tc.status)
-				io.WriteString(w, tc.body)
-			})
-			_, err := newTestClient(srv).Activate(context.Background())
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("err = %v, want errors.Is %v", err, tc.want)
-			}
-		})
+	if resp.Token != testToken || resp.Username != "root" || resp.Role != "root" {
+		t.Fatalf("登录响应不符: %+v", resp)
 	}
 }
 
-func TestBalanceOK(t *testing.T) {
+func TestLoginErrorMapping(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/balance" {
-			t.Errorf("意外路径: %s", r.URL.Path)
-		}
-		json.NewEncoder(w).Encode(map[string]any{"credits": 88})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":"用户名或密码错误"}`)
 	})
-	n, err := newTestClient(srv).Balance(context.Background())
-	if err != nil || n != 88 {
-		t.Fatalf("Balance = %d, %v; want 88, nil", n, err)
-	}
-}
-
-func TestBalanceErrorMapping(t *testing.T) {
-	cases := []struct {
-		code string
-		want error
-	}{
-		{"machine_mismatch", ErrMachineMismatch},
-		{"card_not_activated", ErrCardNotActivated},
-	}
-	for _, tc := range cases {
-		srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(403)
-			json.NewEncoder(w).Encode(map[string]string{"code": tc.code, "error": tc.code})
-		})
-		if _, err := newTestClient(srv).Balance(context.Background()); !errors.Is(err, tc.want) {
-			t.Fatalf("code %s: err = %v, want %v", tc.code, err, tc.want)
-		}
+	_, err := Login(context.Background(), srv.URL, "root", "bad")
+	if !errors.Is(err, ErrAuthInvalid) {
+		t.Fatalf("err = %v, want ErrAuthInvalid", err)
 	}
 }
 
 func TestCreateTaskStreamsUpload(t *testing.T) {
-	// 造一个本地视频文件,验证三段式:建单(头齐、无 body)→ 直传 TOS(流式)→ submit。
 	dir := t.TempDir()
 	video := filepath.Join(dir, "样片 01.mp4")
 	payload := strings.Repeat("fake-mp4-bytes;", 4096)
@@ -142,20 +102,21 @@ func TestCreateTaskStreamsUpload(t *testing.T) {
 				t.Errorf("X-Provider = %q", got)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(201)
+			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(map[string]any{
 				"task_id": "task-1", "upload_url": srv.URL + "/tos/input/task-1.mp4", "expires_in": 7200,
+				"account": nil,
 			})
 		case r.URL.Path == "/tos/input/task-1.mp4" && r.Method == http.MethodPut:
 			body, _ := io.ReadAll(r.Body)
 			if string(body) != payload {
 				t.Errorf("直传体不一致(收到 %d 字节)", len(body))
 			}
-			w.WriteHeader(200)
+			w.WriteHeader(http.StatusOK)
 		case r.URL.Path == "/v1/tasks/task-1/submit" && r.Method == http.MethodPost:
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"task_id": "task-1", "duration_sec": 12.5, "cost": 25, "balance": 95,
+				"task_id": "task-1", "duration_sec": 12.5, "cost": 0, "account": nil,
 			})
 		default:
 			t.Errorf("意外请求: %s %s", r.Method, r.URL.Path)
@@ -168,7 +129,7 @@ func TestCreateTaskStreamsUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if resp.TaskID != "task-1" || resp.Cost != 25 || resp.Balance != 95 || resp.DurationSec != 12.5 {
+	if resp.TaskID != "task-1" || resp.Cost != 0 || resp.DurationSec != 12.5 {
 		t.Fatalf("建单响应不符: %+v", resp)
 	}
 	if lastDone != int64(len(payload)) || totalSeen != int64(len(payload)) {
@@ -224,34 +185,10 @@ func TestCreateTaskTOSUploadError(t *testing.T) {
 				t.Fatal("上传失败后不应调用 submit")
 			}
 			message := Message(err)
-			if strings.Contains(message, "计费服务不可达") || !strings.Contains(message, storeErr.Code) {
+			if strings.Contains(message, "云端服务不可达") || !strings.Contains(message, storeErr.Code) {
 				t.Fatalf("错误文案分类不正确: %q", message)
 			}
 		})
-	}
-}
-
-func TestCreateTaskInsufficientBalance(t *testing.T) {
-	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(402)
-		json.NewEncoder(w).Encode(map[string]any{
-			"error": "insufficient balance", "need": 40, "have": 12,
-		})
-	})
-	dir := t.TempDir()
-	video := filepath.Join(dir, "a.mp4")
-	os.WriteFile(video, []byte("x"), 0o644)
-	_, err := newTestClient(srv).CreateTask(context.Background(), video, "", nil)
-	var insuff *InsufficientBalanceError
-	if !errors.As(err, &insuff) {
-		t.Fatalf("err = %v, want *InsufficientBalanceError", err)
-	}
-	if insuff.Need != 40 || insuff.Have != 12 {
-		t.Fatalf("need/have = %d/%d", insuff.Need, insuff.Have)
-	}
-	if msg := Message(err); !strings.Contains(msg, "余额不足") || !strings.Contains(msg, "40") {
-		t.Fatalf("中文文案不符: %q", msg)
 	}
 }
 
@@ -261,7 +198,10 @@ func TestGetTaskStatus(t *testing.T) {
 		if r.URL.Path != "/v1/tasks/task-9" {
 			t.Errorf("意外路径: %s", r.URL.Path)
 		}
-		out := map[string]any{"task_id": "task-9", "status": status, "duration_sec": 3, "cost": 6}
+		out := map[string]any{
+			"task_id": "task-9", "status": status, "duration_sec": 3, "cost": 0,
+			"account": nil,
+		}
 		if status == "failed" {
 			out["error"] = "provider 内部错误"
 		}
@@ -270,7 +210,7 @@ func TestGetTaskStatus(t *testing.T) {
 	cli := newTestClient(srv)
 	status = "processing"
 	info, err := cli.GetTask(context.Background(), "task-9")
-	if err != nil || info.Status != "processing" {
+	if err != nil || info.Status != "processing" || info.Cost != 0 {
 		t.Fatalf("GetTask = %+v, %v", info, err)
 	}
 	status = "failed"
@@ -288,9 +228,11 @@ func TestDownloadStreamsToDisk(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/tasks/task-1/download":
-			// 现协议:download 302 到算子侧成片地址,客户端须自动跟随
 			http.Redirect(w, r, "/result.mp4", http.StatusFound)
 		case "/result.mp4":
+			if r.Header.Get("Authorization") != "" || r.Header.Get("X-Machine-Hash") != "" {
+				t.Errorf("成片第二跳不应携带云端服务凭据")
+			}
 			w.Header().Set("Content-Type", "video/mp4")
 			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			io.WriteString(w, payload)
@@ -300,8 +242,9 @@ func TestDownloadStreamsToDisk(t *testing.T) {
 	})
 	dst := filepath.Join(t.TempDir(), "out.mp4")
 	var lastDone, totalSeen int64 = -1, -1
-	if err := newTestClient(srv).Download(context.Background(), "task-1", dst,
-		func(done, total int64) { lastDone, totalSeen = done, total }); err != nil {
+	err := newTestClient(srv).Download(context.Background(), "task-1", dst,
+		func(done, total int64) { lastDone, totalSeen = done, total })
+	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	if lastDone != int64(len(payload)) || totalSeen != int64(len(payload)) {
@@ -319,7 +262,7 @@ func TestDownloadStreamsToDisk(t *testing.T) {
 func TestDownloadNotReady(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(409)
+		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]string{"error": "task not completed"})
 	})
 	dst := filepath.Join(t.TempDir(), "out.mp4")
@@ -334,11 +277,7 @@ func TestMessageMapping(t *testing.T) {
 		err  error
 		want string
 	}{
-		{ErrCardInvalid, "卡密无效"},
-		{ErrCardRevoked, "吊销"},
-		{ErrBoundOther, "绑定其它设备"},
-		{ErrMachineMismatch, "机器码"},
-		{ErrCardNotActivated, "尚未激活"},
+		{ErrAuthInvalid, "认证失败"},
 		{ErrTaskNotReady, "尚未完成"},
 	} {
 		if msg := Message(tc.err); !strings.Contains(msg, tc.want) {

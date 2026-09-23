@@ -10,7 +10,7 @@ import (
 )
 
 // KeyFile cardkey.json 内存形态:计费服务地址 + 卡面明文(请求要用)
-// + 激活时绑定的机器码 + 最近一次查到的余额(远端不可达时兜底显示)。
+// + 激活时绑定的机器码。余额只以远端机器账户实时值为准，不落本地。
 //
 // 落盘为整体 DPAPI 形态(授权码/机器码明文落盘可被直接读取,故全包进密文):
 //
@@ -21,7 +21,6 @@ type KeyFile struct {
 	Server      string `json:"server"`
 	CardKey     string `json:"card_key"`
 	MachineHash string `json:"machine_hash"`
-	Credits     int    `json:"credits"` // 本地缓存余额(每次远端查询成功后刷新)
 	ActivatedAt int64  `json:"activated_at"`
 }
 
@@ -69,7 +68,7 @@ func LoadKeyFile(exeDir string) (*KeyFile, error) {
 
 // SaveKeyFile 写 cardkey.json:内层 JSON 整体 DPAPI 后包外壳(0600)。
 // 原子写:先写 .tmp 再 rename,避免崩溃/断电留下半写文件
-// (cardkey.json 是同机余额查询的唯一凭据,半写=只能重新激活)。
+// (cardkey.json 是同机远端账户查询的凭据,半写=只能重新激活)。
 func SaveKeyFile(exeDir string, kf *KeyFile) error {
 	inner, err := json.Marshal(kf)
 	if err != nil {

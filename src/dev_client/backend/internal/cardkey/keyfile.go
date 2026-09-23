@@ -9,42 +9,38 @@ import (
 	"path/filepath"
 )
 
-// KeyFile cardkey.json 内存形态:计费服务地址 + 卡面明文(请求要用)
-// + 激活时绑定的机器码 + 最近一次查到的余额(远端不可达时兜底显示)。
+// CloudCredential cloudauth.json 内存形态:云端服务地址 + 管理员账号/密码。
+// 只用于开发版登录云端内部任务通道;不含卡面,也不含余额。
 //
-// 落盘为整体 DPAPI 形态(授权码/机器码明文落盘可被直接读取,故全包进密文):
+// 落盘为整体 DPAPI 形态:
 //
 //	{"v":2, "blob": base64(DPAPI(innerJSON))}
 //
 // innerJSON 为本结构体字段全集——跨机/跨用户拷贝一律解不出。
-type KeyFile struct {
-	Server      string `json:"server"`
-	CardKey     string `json:"card_key"`
-	MachineHash string `json:"machine_hash"`
-	Credits     int    `json:"credits"` // 本地缓存余额(每次远端查询成功后刷新)
-	ActivatedAt int64  `json:"activated_at"`
+type CloudCredential struct {
+	Server   string `json:"server"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	SavedAt  int64  `json:"saved_at"`
 }
 
-// diskV2 落盘外壳:整体 DPAPI blob。
 type diskV2 struct {
 	V    int    `json:"v"`
 	Blob string `json:"blob"`
 }
 
-// ErrNotActivated 表示 cardkey.json 不存在(未激活);
-// ErrCredentialInvalid 表示文件存在但无法解码/解密,调用方须提示用户且不得擅自删除。
-var ErrNotActivated = errors.New("未激活")
-var ErrCredentialInvalid = errors.New("本地授权数据无法读取")
+var ErrNotConfigured = errors.New("未配置云端账号")
+var ErrCredentialInvalid = errors.New("本地云端凭据无法读取")
 
-// KeyPath cardkey.json 路径(exe 旁)。
-func KeyPath(exeDir string) string { return filepath.Join(exeDir, "cardkey.json") }
+// CredentialPath cloudauth.json 路径(exe 旁)。
+func CredentialPath(exeDir string) string { return filepath.Join(exeDir, "cloudauth.json") }
 
-// LoadKeyFile 读取 cardkey.json;缺失返回 ErrNotActivated,密文损坏返回 ErrCredentialInvalid。
-func LoadKeyFile(exeDir string) (*KeyFile, error) {
-	data, err := os.ReadFile(KeyPath(exeDir))
+// LoadCredential 读取 cloudauth.json;缺失返回 ErrNotConfigured,密文损坏返回 ErrCredentialInvalid。
+func LoadCredential(exeDir string) (*CloudCredential, error) {
+	data, err := os.ReadFile(CredentialPath(exeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrNotActivated
+			return nil, ErrNotConfigured
 		}
 		return nil, err
 	}
@@ -60,18 +56,17 @@ func LoadKeyFile(exeDir string) (*KeyFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: DPAPI 解密失败", ErrCredentialInvalid)
 	}
-	var kf KeyFile
-	if err := json.Unmarshal(pt, &kf); err != nil {
-		return nil, fmt.Errorf("%w: 授权记录非法", ErrCredentialInvalid)
+	var cred CloudCredential
+	if err := json.Unmarshal(pt, &cred); err != nil {
+		return nil, fmt.Errorf("%w: 凭据记录非法", ErrCredentialInvalid)
 	}
-	return &kf, nil
+	return &cred, nil
 }
 
-// SaveKeyFile 写 cardkey.json:内层 JSON 整体 DPAPI 后包外壳(0600)。
-// 原子写:先写 .tmp 再 rename,避免崩溃/断电留下半写文件
-// (cardkey.json 是同机余额查询的唯一凭据,半写=只能重新激活)。
-func SaveKeyFile(exeDir string, kf *KeyFile) error {
-	inner, err := json.Marshal(kf)
+// SaveCredential 写 cloudauth.json:内层 JSON 整体 DPAPI 后包外壳(0600)。
+// 原子写:先写 .tmp 再 rename,避免崩溃/断电留下半写文件。
+func SaveCredential(exeDir string, cred *CloudCredential) error {
+	inner, err := json.Marshal(cred)
 	if err != nil {
 		return err
 	}
@@ -83,7 +78,7 @@ func SaveKeyFile(exeDir string, kf *KeyFile) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(KeyPath(exeDir), data, 0o600)
+	return writeFileAtomic(CredentialPath(exeDir), data, 0o600)
 }
 
 // writeFileAtomic 先写同目录临时文件再原子替换目标。
@@ -110,10 +105,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return err
 }
 
-// ClearKeyFile 删除 cardkey.json(用户主动解除激活;不解远端绑定)。
-func ClearKeyFile(exeDir string) error {
-	os.Remove(KeyPath(exeDir) + ".tmp") // 顺带清原子写残留
-	err := os.Remove(KeyPath(exeDir))
+// ClearCredential 删除 cloudauth.json(只删本机凭据,不影响远端管理员账号)。
+func ClearCredential(exeDir string) error {
+	os.Remove(CredentialPath(exeDir) + ".tmp")
+	err := os.Remove(CredentialPath(exeDir))
 	if err != nil && os.IsNotExist(err) {
 		return nil
 	}

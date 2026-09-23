@@ -23,13 +23,14 @@ import (
 
 // Event is one SSE frame pushed to the frontend.
 type Event struct {
-	Type   string `json:"type"` // progress|stage|log|queue|done
-	TaskID int64  `json:"task_id,omitempty"`
-	Stage  string `json:"stage,omitempty"`
-	Done   int    `json:"done,omitempty"`
-	Total  int    `json:"total,omitempty"`
-	Msg    string `json:"msg,omitempty"`
-	Status string `json:"status,omitempty"`
+	Type    string `json:"type"` // progress|stage|log|queue|done|account
+	TaskID  int64  `json:"task_id,omitempty"`
+	Stage   string `json:"stage,omitempty"`
+	Done    int    `json:"done,omitempty"`
+	Total   int    `json:"total,omitempty"`
+	Msg     string `json:"msg,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Balance *int   `json:"balance,omitempty"`
 }
 
 // taskRunner executes one task to completion (docker runner in docker.go).
@@ -81,9 +82,9 @@ func main() {
 	mux.HandleFunc("POST /api/tasks/{id}/stop", s.handleTaskStop)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleTaskDelete)
 	mux.HandleFunc("GET /api/events", s.hub.handleSSE)
-	mux.HandleFunc("GET /api/cardkey/status", s.handleCardkeyStatus)
-	mux.HandleFunc("POST /api/cardkey/activate", s.handleCardkeyActivate)
-	mux.HandleFunc("POST /api/cardkey/deactivate", s.handleCardkeyDeactivate)
+	mux.HandleFunc("GET /api/account/status", s.handleMachineAccountStatus)
+	mux.HandleFunc("POST /api/cards/redeem", s.handleRedeemCard)
+	mux.HandleFunc("DELETE /api/account/credential", s.handleClearAccountCredential)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "task_mode": s.taskMode})
 	})

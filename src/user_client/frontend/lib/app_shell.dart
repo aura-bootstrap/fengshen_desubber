@@ -23,9 +23,7 @@ const kAppVersion = '1.0.3';
 const kAppEdition = '用户版';
 
 /// 工作区导航(侧栏);后续新页在此追加。
-const navWorkspace = [
-  NavItem('tasks', '任务', Icons.task_alt),
-];
+const navWorkspace = [NavItem('tasks', '任务', Icons.task_alt)];
 
 /// 品牌 LOGO:与程序图标同一图(dev 构建绿色,Release 蓝色,见 Runner.rc)。
 AssetImage brandLogo() =>
@@ -84,9 +82,9 @@ class _AppShellState extends State<AppShell> {
     }
     return switch (_nav) {
       _ => TasksPage(
-          state: widget.state,
-          onOpenDetail: (taskId) => setState(() => _detailTaskId = taskId),
-        ),
+        state: widget.state,
+        onOpenDetail: (taskId) => setState(() => _detailTaskId = taskId),
+      ),
     };
   }
 }
@@ -116,11 +114,7 @@ class _TitleBar extends StatelessWidget {
                   children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(6),
-                      child: Image(
-                        image: brandLogo(),
-                        width: 20,
-                        height: 20,
-                      ),
+                      child: Image(image: brandLogo(), width: 20, height: 20),
                     ),
                     const SizedBox(width: 9),
                     Text(
@@ -139,7 +133,9 @@ class _TitleBar extends StatelessWidget {
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: t.primarySoft,
                         borderRadius: BorderRadius.circular(99),
@@ -184,7 +180,7 @@ class _TitleBar extends StatelessWidget {
   }
 }
 
-/// 授权徽标:已激活绿(附余额点数)/未激活红/查询失败红。
+/// 机器账户徽标：已关联时展示权威余额，查询失败时不沿用旧数字。
 class _CardKeyBadge extends StatelessWidget {
   final AppState state;
   const _CardKeyBadge({required this.state});
@@ -192,15 +188,17 @@ class _CardKeyBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final ck = state.cardKey;
-    final failed = ck == null && state.cardKeyError != null;
-    final active = ck?.activated ?? false;
+    final account = state.machineAccount;
+    final failed = account == null && state.machineAccountError != null;
+    final linked = account?.linked ?? false;
     final text = failed
-        ? '授权状态查询失败'
-        : active
-            ? '已激活 · ${ck!.credits} 点'
-            : '未激活';
-    final ok = !failed && active;
+        ? '机器账户查询失败'
+        : linked
+        ? account!.balanceAvailable
+              ? '机器账户 · ${account.balance} 点'
+              : '机器账户 · 点数待更新'
+        : '未激活';
+    final ok = !failed && linked;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
@@ -271,7 +269,11 @@ class _Sidebar extends StatelessWidget {
   final AppState state;
   final String current;
   final ValueChanged<String> onNav;
-  const _Sidebar({required this.state, required this.current, required this.onNav});
+  const _Sidebar({
+    required this.state,
+    required this.current,
+    required this.onNav,
+  });
 
   @override
   Widget build(BuildContext context) {

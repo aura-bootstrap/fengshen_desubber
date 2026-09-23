@@ -31,6 +31,12 @@ type principal struct {
 	Card  *ddbstore.Card
 }
 
+// machineAccountProjection 是用户主动协议统一返回的机器账户实时投影。
+type machineAccountProjection struct {
+	MachineHash string `json:"machine_hash"`
+	Balance     int64  `json:"balance"`
+}
+
 type Server struct {
 	st         *ddbstore.Store
 	reg        *provider.Registry
@@ -49,9 +55,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/tasks/{id}/submit", s.auth("", s.submitTask))
 	mux.Handle("GET /v1/tasks/{id}", s.auth("", s.getTask))
 	mux.Handle("GET /v1/tasks/{id}/download", s.auth("", s.download))
-	mux.Handle("GET /v1/balance", s.auth("", s.balance))
-	// 激活（卡面 + 机器码绑定）：不走 auth 中间件，自行解析卡面
-	mux.Handle("POST /v1/activate", http.HandlerFunc(s.activate))
+	mux.Handle("GET /v1/account", s.auth("", s.account))
+	// 充值卡核销（卡面 + 机器码绑定）：不走 auth 中间件，自行解析卡面
+	mux.Handle("POST /v1/cards/redeem", http.HandlerFunc(s.redeemCard))
 	// 管理员账号与会话：login 公开，me/logout/password 两角色，accounts* 仅 root
 	mux.Handle("POST /v1/admin/login", http.HandlerFunc(s.login))
 	mux.Handle("GET /v1/admin/me", s.auth(ddbstore.RoleAdmin, s.me))
@@ -206,6 +212,29 @@ func principalOf(r *http.Request) *principal {
 // cardOf 取卡主体；admin token 调用户态接口返回 nil。
 func cardOf(r *http.Request) *ddbstore.Card { return principalOf(r).Card }
 
+// currentMachineAccount 在响应前读取机器账户权威余额，不复用卡记录或请求早期快照。
+func (s *Server) currentMachineAccount(r *http.Request) (*machineAccountProjection, error) {
+	c := cardOf(r)
+	if c == nil {
+		return nil, nil
+	}
+	m, err := s.st.GetMachine(r.Context(), c.MachineHash)
+	if err != nil {
+		return nil, err
+	}
+	return &machineAccountProjection{MachineHash: c.MachineHash, Balance: m.Balance}, nil
+}
+
+func (s *Server) writeMachineAccountJSON(w http.ResponseWriter, r *http.Request, code int, out map[string]any) {
+	account, err := s.currentMachineAccount(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out["account"] = account
+	writeJSON(w, code, out)
+}
+
 // validMachineHash 机器码格式：64 位小写 hex（SHA-256 十六进制形态）。
 func validMachineHash(s string) bool {
 	if len(s) != 64 {
@@ -219,12 +248,10 @@ func validMachineHash(s string) bool {
 	return true
 }
 
-// activate 卡激活=充值券核销：Bearer 卡面 + X-Machine-Hash（64 位小写 hex）。
-// revoked→403 card_revoked；已绑异机→409 card_bound_other；
-// 其余（inactive 新卡 / 旧模型 active 卡 / redeemed 同机幂等）走 EnsureRedeemed：
-// 卡面点数转入机器账户并置 redeemed，返回机器累计余额（credits）。
-// 与 auth 中间件同规：无效卡面计入 IP 连败锁，机器码问题不计。
-func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
+// redeemCard 核销充值卡：Bearer 卡面 + X-Machine-Hash（64 位小写 hex）。
+// revoked→403 card_revoked；已绑异机→409 card_bound_other；其余状态走 EnsureRedeemed，
+// 将卡面点数转入机器账户。无效卡面计入 IP 连败锁，机器码问题不计。
+func (s *Server) redeemCard(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if tok == "" {
 		writeErr(w, http.StatusUnauthorized, "missing token")
@@ -268,7 +295,8 @@ func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"credits": balance, "machine_hash": machine, "status": ddbstore.CardRedeemed,
+		"status":  ddbstore.CardRedeemed,
+		"account": machineAccountProjection{MachineHash: machine, Balance: balance},
 	})
 }
 
@@ -279,11 +307,19 @@ const (
 
 // createTask 建单(不读 body、不扣点):登记 uploading 任务并发预签名 PUT URL,
 // 客户端直传原片到 TOS 后调 submit。上传失败/永不提交的对象由桶生命周期自动过期。
+// 卡面主体走机器账户计费；管理员主体为开发版内部通道，任务不绑定卡、不读写余额。
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
-	c := cardOf(r)
-	if c == nil {
-		writeErr(w, http.StatusForbidden, "需要卡号调用")
-		return
+	p := principalOf(r)
+	cardID := int64(0)
+	machineHash := ""
+	if p.Card != nil {
+		cardID = p.Card.ID
+	} else {
+		machineHash = strings.TrimSpace(r.Header.Get("X-Machine-Hash"))
+		if !validMachineHash(machineHash) {
+			writeErr(w, http.StatusBadRequest, "invalid_machine_hash")
+			return
+		}
 	}
 	filename := path.Base(strings.ReplaceAll(strings.TrimSpace(r.Header.Get("X-Video-Filename")), "\\", "/"))
 	ext := strings.ToLower(path.Ext(filename))
@@ -302,7 +338,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	// 注册表无此平台(Lambda 形态未配置 TOS/LAS env)时,建单只会产生无人处理的
 	// 孤儿任务,必须在登记之前拒绝。
-	p, ok := s.reg.Get(providerName)
+	prov, ok := s.reg.Get(providerName)
 	if !ok {
 		writeErr(w, http.StatusServiceUnavailable, "在线任务暂未部署(服务端无算子平台)")
 		return
@@ -311,20 +347,20 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	taskID := uuid.NewString()
 	srcKey := fmt.Sprintf("input/%s%s", taskID, ext)
 	t := &ddbstore.Task{
-		ID: taskID, CardID: c.ID, Provider: providerName, SrcKey: srcKey,
+		ID: taskID, CardID: cardID, MachineHash: machineHash, Provider: providerName, SrcKey: srcKey,
 		OriginalFilename: filename,
 	}
 	if err := s.st.CreateUploadingTask(r.Context(), t); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	uploadURL, err := p.Uploader.PresignPut(r.Context(), srcKey, uploadURLExpireSec)
+	uploadURL, err := prov.Uploader.PresignPut(r.Context(), srcKey, uploadURLExpireSec)
 	if err != nil {
 		_ = s.st.FailTaskWithRefund(r.Context(), taskID, "presign put: "+err.Error())
 		writeErr(w, http.StatusBadGateway, "presign put: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
+	s.writeMachineAccountJSON(w, r, http.StatusCreated, map[string]any{
 		"task_id": taskID, "upload_url": uploadURL, "expires_in": uploadURLExpireSec,
 	})
 }
@@ -349,7 +385,7 @@ func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "presign get: "+err.Error())
 		return
 	}
-	balance, err := s.st.StartTask(r.Context(), t.ID)
+	_, err = s.st.StartTask(r.Context(), t.ID)
 	if errors.Is(err, ddbstore.ErrInsufficientBalance) {
 		writeErr(w, http.StatusPaymentRequired, "insufficient balance: need at least 1 credit")
 		return
@@ -374,8 +410,8 @@ func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.SetLasTaskID(r.Context(), t.ID, lasID); err != nil {
 		log.Printf("task %s set las id: %v", t.ID, err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"task_id": t.ID, "duration_sec": 0, "cost": 0, "balance": balance,
+	s.writeMachineAccountJSON(w, r, http.StatusOK, map[string]any{
+		"task_id": t.ID, "duration_sec": 0, "cost": 0,
 	})
 }
 
@@ -457,7 +493,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 	if t.Status == ddbstore.TaskProcessing && t.LasTaskID != "" {
 		t = s.advanceTask(r, t)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	s.writeMachineAccountJSON(w, r, http.StatusOK, map[string]any{
 		"task_id": t.ID, "status": t.Status, "duration_sec": t.DurationSec,
 		"cost": t.Cost, "error": t.Error, "original_filename": t.OriginalFilename,
 	})
@@ -484,21 +520,29 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "result url unavailable")
 		return
 	}
-	http.Redirect(w, r, url, http.StatusFound)
-}
-
-func (s *Server) balance(w http.ResponseWriter, r *http.Request) {
-	c := cardOf(r)
-	if c == nil {
-		writeErr(w, http.StatusForbidden, "需要卡号调用")
-		return
-	}
-	m, err := s.st.GetMachine(r.Context(), c.MachineHash)
+	account, err := s.currentMachineAccount(r)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"credits": m.Balance})
+	if account != nil {
+		w.Header().Set("X-Machine-Account-Hash", account.MachineHash)
+		w.Header().Set("X-Machine-Account-Balance", fmt.Sprint(account.Balance))
+	}
+	http.Redirect(w, r, url, http.StatusFound)
+}
+
+func (s *Server) account(w http.ResponseWriter, r *http.Request) {
+	if cardOf(r) == nil {
+		writeErr(w, http.StatusForbidden, "需要充值卡凭据调用")
+		return
+	}
+	account, err := s.currentMachineAccount(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"account": account})
 }
 
 // createUser 旧协议兼容：建卡即建账号，token 字段返回明文卡面（仅此一次）。

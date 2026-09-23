@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -157,7 +158,7 @@ func setup(t *testing.T, op provider.Operator) *env {
 	json.Unmarshal(b, &u)
 	e.userID, e.userTok = u.UserID, u.Token
 
-	code, b = e.doMachine(t, "POST", "/v1/activate", e.userTok, e.machine, nil)
+	code, b = e.doMachine(t, "POST", "/v1/cards/redeem", e.userTok, e.machine, nil)
 	if code != 200 {
 		t.Fatalf("activate: %d %s", code, b)
 	}
@@ -246,10 +247,14 @@ func (e *env) taskFlow(t *testing.T, durationSec int64) (string, int, []byte) {
 		t.Fatalf("create: %d %s", code, b)
 	}
 	var created struct {
-		TaskID    string `json:"task_id"`
-		UploadURL string `json:"upload_url"`
+		TaskID    string                   `json:"task_id"`
+		UploadURL string                   `json:"upload_url"`
+		Account   machineAccountProjection `json:"account"`
 	}
 	json.Unmarshal(b, &created)
+	if created.Account.MachineHash != e.machine || created.Account.Balance != 5 {
+		t.Fatalf("create account projection missing: %+v", created.Account)
+	}
 
 	p := filepath.Join(t.TempDir(), "v.mp4")
 	testutil.WriteTestMP4(t, p, durationSec)
@@ -302,17 +307,19 @@ func TestFullFlowSuccess(t *testing.T) {
 		t.Fatalf("submit: %d %s", code, b)
 	}
 	var sub struct {
-		Cost    int64 `json:"cost"`
-		Balance int64 `json:"balance"`
+		Cost    int64                    `json:"cost"`
+		Account machineAccountProjection `json:"account"`
 	}
 	json.Unmarshal(b, &sub)
-	if sub.Cost != 0 || sub.Balance != 5 {
+	if sub.Cost != 0 || sub.Account.Balance != 5 || sub.Account.MachineHash != e.machine {
 		t.Fatalf("submit should defer settlement: %+v", sub)
 	}
 
 	completed := waitStatus(t, e, taskID, "completed")
+	account := completed["account"].(map[string]any)
 	if completed["cost"] != float64(2) || completed["duration_sec"] != float64(65) ||
-		completed["original_filename"] != "来源样片.mp4" {
+		completed["original_filename"] != "来源样片.mp4" ||
+		account["balance"] != float64(3) || account["machine_hash"] != e.machine {
 		t.Fatalf("settlement wrong: %v", completed)
 	}
 	code, txBody := e.do(t, "GET", "/v1/admin/transactions?user_id="+fmt.Sprint(e.userID), e.adminTok, nil)
@@ -336,29 +343,157 @@ func TestFullFlowSuccess(t *testing.T) {
 		t.Fatalf("tos delete = %v", del)
 	}
 
-	// download 302 到算子侧成片地址,http.Client 自动跟随
+	// download 的 302 响应头同步携带机器账户，第二跳不带计费凭据。
 	req, _ := http.NewRequest("GET", e.srv.URL+"/v1/tasks/"+taskID+"/download", nil)
 	req.Header.Set("Authorization", "Bearer "+e.userTok)
 	req.Header.Set("X-Machine-Hash", e.machine)
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusFound ||
+		resp.Header.Get("X-Machine-Account-Hash") != e.machine ||
+		resp.Header.Get("X-Machine-Account-Balance") != "3" {
+		t.Fatalf("download redirect/account headers: %d %v", resp.StatusCode, resp.Header)
+	}
+	location := resp.Header.Get("Location")
+	resp.Body.Close()
+	resultResp, err := http.Get(location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resultResp.Body.Close()
+	var buf bytes.Buffer
+	buf.ReadFrom(resultResp.Body)
+	if resultResp.StatusCode != 200 || !bytes.Equal(buf.Bytes(), result) {
+		t.Fatalf("download: %d len=%d", resultResp.StatusCode, buf.Len())
+	}
+
+	// 机器账户余额保持 3，无退款。
+	_, b = e.do(t, "GET", "/v1/account", e.userTok, nil)
+	var accountResp struct {
+		Account machineAccountProjection `json:"account"`
+	}
+	json.Unmarshal(b, &accountResp)
+	if accountResp.Account.Balance != 3 || accountResp.Account.MachineHash != e.machine {
+		t.Fatalf("account want balance 3, got %+v", accountResp.Account)
+	}
+}
+
+// TestAdminInternalTaskNoCredits 开发版内部通道:管理员会话建单(CardID=0),
+// 全程不检查/不扣减余额,完成时 cost=0、不建机器账户,download 无账户头;
+// 卡面用户看不到内部任务(404)。
+func TestAdminInternalTaskNoCredits(t *testing.T) {
+	result := []byte("fake-erase-result")
+	resultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(result)
+	}))
+	t.Cleanup(resultSrv.Close)
+	e := setup(t, &fakeOperator{resultURL: resultSrv.URL + "/v.mp4", durationSec: 65})
+
+	// 建单:管理员会话 + 机器码头(仅归因),不带卡。
+	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/tasks", nil)
+	req.Header.Set("Authorization", "Bearer "+e.adminTok)
+	req.Header.Set("X-Video-Filename", `D:\dev\内部样片.mp4`)
+	req.Header.Set("X-Machine-Hash", testMachine2)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
 	var buf bytes.Buffer
 	buf.ReadFrom(resp.Body)
-	if resp.StatusCode != 200 || !bytes.Equal(buf.Bytes(), result) {
-		t.Fatalf("download: %d len=%d", resp.StatusCode, buf.Len())
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("admin create: %d %s", resp.StatusCode, buf.Bytes())
+	}
+	var created struct {
+		TaskID    string                    `json:"task_id"`
+		UploadURL string                    `json:"upload_url"`
+		Account   *machineAccountProjection `json:"account"`
+	}
+	json.Unmarshal(buf.Bytes(), &created)
+	if created.Account != nil {
+		t.Fatalf("internal task should not carry account projection: %+v", created.Account)
 	}
 
-	// 余额保持 3，无退款
-	_, b = e.do(t, "GET", "/v1/balance", e.userTok, nil)
-	var bal struct {
-		Credits int64 `json:"credits"`
+	p := filepath.Join(t.TempDir(), "v.mp4")
+	testutil.WriteTestMP4(t, p, 65)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
 	}
-	json.Unmarshal(b, &bal)
-	if bal.Credits != 3 {
-		t.Fatalf("balance want 3, got %d", bal.Credits)
+	putReq, _ := http.NewRequest(http.MethodPut, created.UploadURL, bytes.NewReader(data))
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != 200 {
+		t.Fatalf("tos put: %d", putResp.StatusCode)
+	}
+
+	// submit:管理员无机器账户也不应报 402。
+	code, b := e.do(t, "POST", "/v1/tasks/"+created.TaskID+"/submit", e.adminTok, nil)
+	if code != 200 {
+		t.Fatalf("admin submit: %d %s", code, b)
+	}
+
+	// 轮询(管理员视角)到 completed:cost=0、无 account 投影。
+	var completed map[string]any
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		code, b := e.do(t, "GET", "/v1/tasks/"+created.TaskID, e.adminTok, nil)
+		if code == 200 {
+			var st map[string]any
+			json.Unmarshal(b, &st)
+			if st["status"] == "completed" {
+				completed = st
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if completed == nil {
+		t.Fatalf("internal task never completed")
+	}
+	if completed["cost"] != float64(0) || completed["duration_sec"] != float64(65) ||
+		completed["original_filename"] != "内部样片.mp4" {
+		t.Fatalf("internal task settlement should be cost 0: %v", completed)
+	}
+	if account, ok := completed["account"]; ok && account != nil {
+		t.Fatalf("internal task should not carry account: %v", account)
+	}
+
+	// 不建机器账户(自然也无流水)。
+	if _, err := e.st.GetMachine(context.Background(), testMachine2); !errors.Is(err, ddbstore.ErrNotFound) {
+		t.Fatalf("internal task should not create machine account: %v", err)
+	}
+
+	// 卡面用户看不到内部任务。
+	code, _ = e.do(t, "GET", "/v1/tasks/"+created.TaskID, e.userTok, nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("user token must not see internal task: %d", code)
+	}
+
+	// download:302 可用但无机器账户头。
+	dlReq, _ := http.NewRequest("GET", e.srv.URL+"/v1/tasks/"+created.TaskID+"/download", nil)
+	dlReq.Header.Set("Authorization", "Bearer "+e.adminTok)
+	dlReq.Header.Set("X-Machine-Hash", testMachine2)
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	dlResp, err := client.Do(dlReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode != http.StatusFound ||
+		dlResp.Header.Get("X-Machine-Account-Hash") != "" ||
+		dlResp.Header.Get("X-Machine-Account-Balance") != "" {
+		t.Fatalf("admin download: %d %v", dlResp.StatusCode, dlResp.Header)
 	}
 }
 
@@ -387,7 +522,7 @@ func TestCreateTaskRejectedWithoutProvider(t *testing.T) {
 	}
 	json.Unmarshal(b, &u)
 	e.userID, e.userTok = u.UserID, u.Token
-	code, b = e.doMachine(t, "POST", "/v1/activate", e.userTok, e.machine, nil)
+	code, b = e.doMachine(t, "POST", "/v1/cards/redeem", e.userTok, e.machine, nil)
 	if code != 200 {
 		t.Fatalf("activate: %d %s", code, b)
 	}
@@ -401,13 +536,13 @@ func TestCreateTaskRejectedWithoutProvider(t *testing.T) {
 	if code != http.StatusServiceUnavailable {
 		t.Fatalf("empty registry should reject with 503, got %d %s", code, b)
 	}
-	_, b = e.do(t, "GET", "/v1/balance", e.userTok, nil)
-	var bal struct {
-		Credits int64 `json:"credits"`
+	_, b = e.do(t, "GET", "/v1/account", e.userTok, nil)
+	var accountResp struct {
+		Account machineAccountProjection `json:"account"`
 	}
-	json.Unmarshal(b, &bal)
-	if bal.Credits != 5 {
-		t.Fatalf("no debit expected, got %d", bal.Credits)
+	json.Unmarshal(b, &accountResp)
+	if accountResp.Account.Balance != 5 {
+		t.Fatalf("no debit expected, got %d", accountResp.Account.Balance)
 	}
 }
 
@@ -429,13 +564,13 @@ func TestFailureRefunds(t *testing.T) {
 		t.Fatalf("tos delete = %v", del)
 	}
 
-	_, b = e.do(t, "GET", "/v1/balance", e.userTok, nil)
-	var bal struct {
-		Credits int64 `json:"credits"`
+	_, b = e.do(t, "GET", "/v1/account", e.userTok, nil)
+	var accountResp struct {
+		Account machineAccountProjection `json:"account"`
 	}
-	json.Unmarshal(b, &bal)
-	if bal.Credits != 5 {
-		t.Fatalf("after refund want 5, got %d", bal.Credits)
+	json.Unmarshal(b, &accountResp)
+	if accountResp.Account.Balance != 5 {
+		t.Fatalf("after refund want 5, got %d", accountResp.Account.Balance)
 	}
 
 	// 下载被拒
@@ -462,7 +597,7 @@ func TestInsufficientBalance(t *testing.T) {
 func TestAuthAndAdminGuard(t *testing.T) {
 	e := setup(t, nil)
 
-	code, _ := e.do(t, "GET", "/v1/balance", "bad-token", nil)
+	code, _ := e.do(t, "GET", "/v1/account", "bad-token", nil)
 	if code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", code)
 	}
@@ -650,10 +785,8 @@ func TestAdminSessionFlow(t *testing.T) {
 	}
 }
 
-// TestActivateFlow 激活=核销全链路：
-// inactive 卡拒业务→激活（点数转机器账户）→同机幂等→异机 409→机器码不符 403
-// →redeemed 卡拒解绑→吊销拒激活→恢复后绑定机可用。
-func TestActivateFlow(t *testing.T) {
+// TestRedeemCardFlow 覆盖充值卡核销、同机幂等、异机拒绝及机器账户查询。
+func TestRedeemCardFlow(t *testing.T) {
 	e := setup(t, nil)
 
 	// setup 已激活 userTok；另发一张未激活新卡
@@ -671,61 +804,60 @@ func TestActivateFlow(t *testing.T) {
 	card := gen.Cards[0].Code
 
 	// 未激活：带不带机器码都 403 card_not_activated
-	code, b = e.doMachine(t, "GET", "/v1/balance", card, testMachine, nil)
+	code, b = e.doMachine(t, "GET", "/v1/account", card, testMachine, nil)
 	if code != http.StatusForbidden || !bytes.Contains(b, []byte("card_not_activated")) {
 		t.Fatalf("inactive balance: %d %s", code, b)
 	}
 
 	// 机器码格式校验：非 64 位小写 hex → 400
-	code, b = e.doMachine(t, "POST", "/v1/activate", card, "XYZ", nil)
+	code, b = e.doMachine(t, "POST", "/v1/cards/redeem", card, "XYZ", nil)
 	if code != http.StatusBadRequest || !bytes.Contains(b, []byte("invalid_machine_hash")) {
 		t.Fatalf("bad machine: %d %s", code, b)
 	}
 
 	// 激活成功：3 点转入机器账户，卡置 redeemed
-	code, b = e.doMachine(t, "POST", "/v1/activate", card, testMachine, nil)
+	code, b = e.doMachine(t, "POST", "/v1/cards/redeem", card, testMachine, nil)
 	if code != 200 {
 		t.Fatalf("activate: %d %s", code, b)
 	}
-	var act struct {
-		Credits     int64  `json:"credits"`
-		MachineHash string `json:"machine_hash"`
-		Status      string `json:"status"`
+	var redeemed struct {
+		Status  string                   `json:"status"`
+		Account machineAccountProjection `json:"account"`
 	}
-	json.Unmarshal(b, &act)
-	// credits 为机器累计余额:setup 已给同机充 5,本卡核销 3 → 8
-	if act.Credits != 8 || act.MachineHash != testMachine || act.Status != "redeemed" {
-		t.Fatalf("activate resp: %+v", act)
+	json.Unmarshal(b, &redeemed)
+	if redeemed.Account.Balance != 8 || redeemed.Account.MachineHash != testMachine ||
+		redeemed.Status != "redeemed" {
+		t.Fatalf("redeem resp: %+v", redeemed)
 	}
 
 	// 同机幂等（不多入账）
-	code, b = e.doMachine(t, "POST", "/v1/activate", card, testMachine, nil)
+	code, b = e.doMachine(t, "POST", "/v1/cards/redeem", card, testMachine, nil)
 	if code != 200 {
 		t.Fatalf("re-activate same machine: %d", code)
 	}
-	json.Unmarshal(b, &act)
-	if act.Credits != 8 {
-		t.Fatalf("idempotent activate double-credited: %+v", act)
+	json.Unmarshal(b, &redeemed)
+	if redeemed.Account.Balance != 8 {
+		t.Fatalf("idempotent redeem double-credited: %+v", redeemed)
 	}
 
 	// 异机 → 409 card_bound_other
-	code, b = e.doMachine(t, "POST", "/v1/activate", card, testMachine2, nil)
+	code, b = e.doMachine(t, "POST", "/v1/cards/redeem", card, testMachine2, nil)
 	if code != http.StatusConflict || !bytes.Contains(b, []byte("card_bound_other")) {
 		t.Fatalf("activate other machine: %d %s", code, b)
 	}
 
 	// 业务接口机器码不符 → 403 machine_mismatch；不带机器码同罪
-	code, b = e.doMachine(t, "GET", "/v1/balance", card, testMachine2, nil)
+	code, b = e.doMachine(t, "GET", "/v1/account", card, testMachine2, nil)
 	if code != http.StatusForbidden || !bytes.Contains(b, []byte("machine_mismatch")) {
 		t.Fatalf("wrong machine balance: %d %s", code, b)
 	}
-	code, b = e.doMachine(t, "GET", "/v1/balance", card, "", nil)
+	code, b = e.doMachine(t, "GET", "/v1/account", card, "", nil)
 	if code != http.StatusForbidden || !bytes.Contains(b, []byte("machine_mismatch")) {
 		t.Fatalf("no machine balance: %d %s", code, b)
 	}
 
 	// 绑定机正常
-	code, b = e.doMachine(t, "GET", "/v1/balance", card, testMachine, nil)
+	code, b = e.doMachine(t, "GET", "/v1/account", card, testMachine, nil)
 	if code != 200 {
 		t.Fatalf("bound machine balance: %d %s", code, b)
 	}
@@ -743,7 +875,7 @@ func TestActivateFlow(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("revoke: %d", code)
 	}
-	code, b = e.doMachine(t, "POST", "/v1/activate", card, testMachine, nil)
+	code, b = e.doMachine(t, "POST", "/v1/cards/redeem", card, testMachine, nil)
 	if code != http.StatusForbidden || !bytes.Contains(b, []byte("card_revoked")) {
 		t.Fatalf("revoked activate: %d %s", code, b)
 	}
@@ -759,16 +891,16 @@ func TestActivateFlow(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("unrevoke: %d", code)
 	}
-	code, b = e.doMachine(t, "GET", "/v1/balance", card, testMachine, nil)
+	code, b = e.doMachine(t, "GET", "/v1/account", card, testMachine, nil)
 	if code != 200 {
 		t.Fatalf("balance after unrevoke: %d %s", code, b)
 	}
-	var bal struct {
-		Credits int64 `json:"credits"`
+	var accountResp struct {
+		Account machineAccountProjection `json:"account"`
 	}
-	json.Unmarshal(b, &bal)
-	if bal.Credits != 8 {
-		t.Fatalf("balance after unrevoke want 8, got %d", bal.Credits)
+	json.Unmarshal(b, &accountResp)
+	if accountResp.Account.Balance != 8 {
+		t.Fatalf("balance after unrevoke want 8, got %d", accountResp.Account.Balance)
 	}
 }
 

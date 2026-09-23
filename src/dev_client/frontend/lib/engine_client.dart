@@ -146,20 +146,28 @@ class EngineClient {
     }
   }
 
-  // ---- 卡密(在线去字幕) ----
+  // ---- 云端账号(在线去字幕内部通道) ----
 
-  /// 卡密状态;远端不可达时引擎回本地缓存(stale=true)。
-  Future<CardKeyStatus> cardkeyStatus() async =>
-      CardKeyStatus.fromJson(decodeJsonObject(await _get('/api/cardkey/status')));
+  /// 云端账号状态;linked 表示本机已配置凭据,online 表示凭据通过远端验证。
+  Future<CloudStatus> cloudStatus() async =>
+      CloudStatus.fromJson(decodeJsonObject(await _get('/api/cloud/status')));
 
-  /// 激活卡密;server 空串时引擎回落全局配置 online.server。
-  Future<void> cardkeyActivate(String cardKey, {String server = ''}) async =>
-      _postJson('/api/cardkey/activate',
-          {'card_key': cardKey, if (server.isNotEmpty) 'server': server});
+  /// 登录云端账号;server 空串时引擎回落全局配置 online.server。成功才落盘凭据。
+  Future<void> cloudLogin(String username, String password,
+          {String server = ''}) async =>
+      _postJson('/api/cloud/login', {
+        'username': username,
+        'password': password,
+        if (server.isNotEmpty) 'server': server
+      });
 
-  /// 解绑:只删本地 keyfile,不解远端绑定。
-  Future<void> cardkeyDeactivate() async =>
-      _postJson('/api/cardkey/deactivate');
+  /// 清除本机云端凭据(不吊销远端会话)。
+  Future<void> clearCloudCredential() async {
+    final resp = await _http.delete(_u('/api/cloud/credential'));
+    if (resp.statusCode != 200) {
+      throw ApiException(resp.statusCode, utf8.decode(resp.bodyBytes));
+    }
+  }
 
   Future<String> _get(String path) async {
     final resp = await _http.get(_u(path));

@@ -1,7 +1,6 @@
-// Package cardkey 卡密客户端基础:机器码采集(网卡 MAC + 系统盘物理序列号)
-// 与 cardkey.json 密钥保管(DPAPI 整体加密落盘)。
-// 诚实边界:本机同 Windows 用户上下文可调 DPAPI 解出卡密——只挡跨机/跨用户拷贝,
-// 真实防护强度在服务端(卡密与机器码绑定,余额扣减全在云端)。
+// Package cardkey 开发版本机身份基础:机器码采集(网卡 MAC + 系统盘物理序列号)
+// 与 cloudauth.json 云端管理员凭据保管(DPAPI 整体加密落盘)。
+// 诚实边界:本机同 Windows 用户上下文可调 DPAPI 解出凭据——只挡跨机/跨用户拷贝。
 package cardkey
 
 import (

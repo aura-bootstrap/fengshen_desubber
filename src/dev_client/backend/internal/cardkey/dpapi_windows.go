@@ -9,7 +9,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// DPAPI(CryptProtectData/CryptUnprotectData):cardkey.json 落盘加密。
+// DPAPI(CryptProtectData/CryptUnprotectData):cloudauth.json 落盘加密。
 // 密钥派生自当前 Windows 用户凭据——只挡跨机/跨用户拷贝,不挡本机同用户进程(诚实边界)。
 
 var (

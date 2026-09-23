@@ -8,34 +8,34 @@ import (
 	"testing"
 )
 
-// TestKeyFileRoundtrip 保存/读取往返:DPAPI 仅 Windows 可用,其它平台跳过。
-func TestKeyFileRoundtrip(t *testing.T) {
+// TestCredentialRoundtrip 保存/读取往返:DPAPI 仅 Windows 可用,其它平台跳过。
+func TestCredentialRoundtrip(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("DPAPI 仅支持 Windows")
 	}
 	dir := t.TempDir()
-	if _, err := LoadKeyFile(dir); !errors.Is(err, ErrNotActivated) {
-		t.Fatalf("空目录应返回 ErrNotActivated, got %v", err)
+	if _, err := LoadCredential(dir); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("空目录应返回 ErrNotConfigured, got %v", err)
 	}
-	want := &KeyFile{
-		Server: "https://billing.example.com", CardKey: "ABCDE-FGHIJ-KLMNO",
-		MachineHash: strings.Repeat("A", 64), Credits: 88, ActivatedAt: 1700000000,
+	want := &CloudCredential{
+		Server: "https://billing.example.com", Username: "root",
+		Password: "secret", SavedAt: 1700000000,
 	}
-	if err := SaveKeyFile(dir, want); err != nil {
-		t.Fatalf("SaveKeyFile: %v", err)
+	if err := SaveCredential(dir, want); err != nil {
+		t.Fatalf("SaveCredential: %v", err)
 	}
-	got, err := LoadKeyFile(dir)
+	got, err := LoadCredential(dir)
 	if err != nil {
-		t.Fatalf("LoadKeyFile: %v", err)
+		t.Fatalf("LoadCredential: %v", err)
 	}
 	if *got != *want {
 		t.Fatalf("往返不一致: got %+v, want %+v", got, want)
 	}
-	if err := ClearKeyFile(dir); err != nil {
-		t.Fatalf("ClearKeyFile: %v", err)
+	if err := ClearCredential(dir); err != nil {
+		t.Fatalf("ClearCredential: %v", err)
 	}
-	if _, err := LoadKeyFile(dir); !errors.Is(err, ErrNotActivated) {
-		t.Fatalf("清除后应返回 ErrNotActivated, got %v", err)
+	if _, err := LoadCredential(dir); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("清除后应返回 ErrNotConfigured, got %v", err)
 	}
 }
 
@@ -56,6 +56,9 @@ func TestMachineIDDegraded(t *testing.T) {
 	}
 	if !degraded || len(hash) != 64 {
 		t.Fatalf("应降级且哈希 64 字符: degraded=%v hash=%q", degraded, hash)
+	}
+	if strings.Contains(hash, "-") {
+		t.Fatalf("机器码应为纯 hex: %q", hash)
 	}
 }
 

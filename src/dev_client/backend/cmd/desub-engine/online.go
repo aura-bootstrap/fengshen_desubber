@@ -1,10 +1,9 @@
 package main
 
 // 在线去字幕执行链路(任务快照 online.enabled=true 时替代本地 desub 管线):
-// 读 cardkey.json -> 建单拿预签名 URL 直传原片到 TOS -> submit 提交算子 ->
-// 每 15s 轮询状态(上限 6 小时,长视频) -> completed 后下载成片(302 到算子侧地址)
-// 到本任务约定的输出位置(workDir/outName)。
-// 移植自用户版 internal/runner/online.go;平台选择透传空值走服务端默认平台。
+// 读 cloudauth.json -> 管理员登录换会话 -> 建单拿预签名 URL 直传原片到 TOS ->
+// submit 提交算子 -> 每 15s 轮询状态(上限 6 小时) -> completed 后下载成片。
+// 这是开发版内部通道:不核销卡、不读写机器账户余额。
 
 import (
 	"context"
@@ -39,14 +38,22 @@ func xferProgress(stage string, events chan<- Event) billing.ProgressFn {
 
 // runOnline 在线去字幕主流程。ctx 取消(用户停止任务)会中断上传/轮询/下载。
 func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName string, events chan<- Event) error {
-	kf, err := cardkey.LoadKeyFile(keyDir)
+	cred, err := cardkey.LoadCredential(keyDir)
 	if err != nil {
-		if errors.Is(err, cardkey.ErrNotActivated) {
-			return errors.New("在线去字幕需要先激活卡密(新建任务选在线引擎后激活)")
+		if errors.Is(err, cardkey.ErrNotConfigured) {
+			return errors.New("在线去字幕需要先配置云端内部账号(新建任务选在线引擎后登录)")
 		}
-		return fmt.Errorf("读取本地卡密信息失败: %v", err)
+		return fmt.Errorf("读取本地云端凭据失败: %v", err)
 	}
-	cli := billing.New(kf.Server, kf.CardKey, kf.MachineHash)
+	login, err := billing.Login(ctx, cred.Server, cred.Username, cred.Password)
+	if err != nil {
+		return fmt.Errorf("云端内部账号登录失败: %s", billing.Message(err))
+	}
+	hash, _, err := cardkey.MachineID()
+	if err != nil {
+		return fmt.Errorf("机器码采集失败: %v", err)
+	}
+	cli := billing.New(cred.Server, login.Token, hash)
 
 	// 1. 上传原片建单。
 	events <- Event{Type: "stage", Stage: "upload"}
@@ -55,16 +62,8 @@ func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName string, ev
 	if err != nil {
 		return fmt.Errorf("云端建单失败: %s", billing.Message(err))
 	}
-	if created.Cost == 0 {
-		events <- Event{Type: "log", Msg: fmt.Sprintf("云端任务 %s 已提交，处理完成后按实际时长结算", created.TaskID)}
-	} else {
-		events <- Event{Type: "log", Msg: fmt.Sprintf(
-			"云端任务 %s 已创建(时长 %.1fs,扣点 %d,余额 %d)",
-			created.TaskID, created.DurationSec, created.Cost, created.Balance)}
-	}
-	// 顺带刷新本地缓存余额(status 接口远端不可达时兜底显示)。
-	kf.Credits = created.Balance
-	_ = cardkey.SaveKeyFile(keyDir, kf)
+	events <- Event{Type: "log", Msg: fmt.Sprintf(
+		"云端任务 %s 已提交(内部通道,不计点数)", created.TaskID)}
 
 	// 2. 轮询云端状态直至 completed/failed/超时。
 	events <- Event{Type: "stage", Stage: "cloud"}
@@ -94,7 +93,7 @@ func runOnline(ctx context.Context, keyDir, workDir, srcPath, outName string, ev
 			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("云端处理超时(超过 %s 未完成),任务已失败;如已扣点请联系售卡方", onlinePollTimeout)
+			return fmt.Errorf("云端处理超时(超过 %s 未完成),任务已失败", onlinePollTimeout)
 		}
 		select {
 		case <-ctx.Done():

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,28 +44,34 @@ func New(server, cardKey, machineHash string) *Client {
 	}
 }
 
-// ActivateResp POST /v1/activate 成功响应。
-type ActivateResp struct {
-	Credits     int    `json:"credits"`
+// MachineAccount 是计费服务返回的机器账户权威投影。
+type MachineAccount struct {
 	MachineHash string `json:"machine_hash"`
-	Status      string `json:"status"`
+	Balance     int    `json:"balance"`
+}
+
+// RedeemCardResp POST /v1/cards/redeem 成功响应。
+type RedeemCardResp struct {
+	Status  string         `json:"status"`
+	Account MachineAccount `json:"account"`
 }
 
 // CreateTaskResp 任务提交(submit)成功响应。
 type CreateTaskResp struct {
-	TaskID      string  `json:"task_id"`
-	DurationSec float64 `json:"duration_sec"`
-	Cost        int     `json:"cost"`
-	Balance     int     `json:"balance"`
+	TaskID      string         `json:"task_id"`
+	DurationSec float64        `json:"duration_sec"`
+	Cost        int            `json:"cost"`
+	Account     MachineAccount `json:"account"`
 }
 
 // TaskInfo GET /v1/tasks/{id} 响应;Status: queued/processing/completed/failed。
 type TaskInfo struct {
-	TaskID      string  `json:"task_id"`
-	Status      string  `json:"status"`
-	DurationSec float64 `json:"duration_sec"`
-	Cost        int     `json:"cost"`
-	Error       string  `json:"error"`
+	TaskID      string         `json:"task_id"`
+	Status      string         `json:"status"`
+	DurationSec float64        `json:"duration_sec"`
+	Cost        int            `json:"cost"`
+	Error       string         `json:"error"`
+	Account     MachineAccount `json:"account"`
 }
 
 // newRequest 建带统一鉴权头的请求。
@@ -78,10 +85,10 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	return req, nil
 }
 
-// Activate 卡密激活:绑定本机机器码,返回初始余额。
+// RedeemCard 核销充值卡并返回其绑定的机器账户。
 // 错误: 401 ErrCardInvalid / 403 ErrCardRevoked / 409 ErrBoundOther。
-func (c *Client) Activate(ctx context.Context) (*ActivateResp, error) {
-	req, err := c.newRequest(ctx, http.MethodPost, "/v1/activate", nil)
+func (c *Client) RedeemCard(ctx context.Context) (*RedeemCardResp, error) {
+	req, err := c.newRequest(ctx, http.MethodPost, "/v1/cards/redeem", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -93,35 +100,35 @@ func (c *Client) Activate(ctx context.Context) (*ActivateResp, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, decodeErr(resp)
 	}
-	var out ActivateResp
+	var out RedeemCardResp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("激活响应解析失败: %v", err)
+		return nil, fmt.Errorf("充值卡核销响应解析失败: %v", err)
 	}
 	return &out, nil
 }
 
-// Balance 查询余额。
+// Account 查询机器账户实时状态。
 // 错误: 403 ErrMachineMismatch / ErrCardNotActivated。
-func (c *Client) Balance(ctx context.Context) (int, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, "/v1/balance", nil)
+func (c *Client) Account(ctx context.Context) (MachineAccount, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/account", nil)
 	if err != nil {
-		return 0, err
+		return MachineAccount{}, err
 	}
 	resp, err := c.short.Do(req)
 	if err != nil {
-		return 0, err
+		return MachineAccount{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, decodeErr(resp)
+		return MachineAccount{}, decodeErr(resp)
 	}
 	var out struct {
-		Credits int `json:"credits"`
+		Account MachineAccount `json:"account"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return 0, fmt.Errorf("余额响应解析失败: %v", err)
+		return MachineAccount{}, fmt.Errorf("机器账户响应解析失败: %v", err)
 	}
-	return out.Credits, nil
+	return out.Account, nil
 }
 
 // ProgressFn 传输进度回调(sent/got 字节数,total 未知时为 0)。
@@ -252,25 +259,55 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (*TaskInfo, error) 
 }
 
 // Download 流式下载成片到 dstPath(先写 .part 再 rename,避免半截文件)。
+// 首跳禁止自动跟随，以读取 302 上的账户头；第二跳不携带计费鉴权头。
 // onProgress 非空时回报下载字节进度(服务端未给 Content-Length 时 total 为 0)。
 // 错误: 409 ErrTaskNotReady。
-func (c *Client) Download(ctx context.Context, taskID, dstPath string, onProgress ProgressFn) error {
+func (c *Client) Download(ctx context.Context, taskID, dstPath string, onProgress ProgressFn) (*MachineAccount, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, "/v1/tasks/"+taskID+"/download", nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	resp, err := c.long.Do(req)
+	firstClient := *c.long
+	firstClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := firstClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusFound {
+		defer resp.Body.Close()
+		return nil, decodeErr(resp)
+	}
+	account, err := accountFromHeaders(resp.Header)
+	location := resp.Header.Get("Location")
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if location == "" {
+		return nil, fmt.Errorf("下载响应缺 Location")
+	}
+	resultURL, err := req.URL.Parse(location)
+	if err != nil {
+		return nil, fmt.Errorf("下载地址解析失败: %v", err)
+	}
+	downloadReq, err := http.NewRequestWithContext(ctx, http.MethodGet, resultURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err = c.long.Do(downloadReq)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return decodeErr(resp)
+		return nil, decodeErr(resp)
 	}
 	tmp := dstPath + ".part"
 	f, err := os.Create(tmp)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var src io.Reader = resp.Body
 	total := resp.ContentLength // 未知时为 -1,归一成 0
@@ -285,13 +322,26 @@ func (c *Client) Download(ctx context.Context, taskID, dstPath string, onProgres
 	closeErr := f.Close()
 	if err := firstErr(copyErr, syncErr, closeErr); err != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("成片写盘失败: %v", err)
+		return nil, fmt.Errorf("成片写盘失败: %v", err)
 	}
 	if err := os.Rename(tmp, dstPath); err != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("成片落盘失败: %v", err)
+		return nil, fmt.Errorf("成片落盘失败: %v", err)
 	}
-	return nil
+	return account, nil
+}
+
+func accountFromHeaders(h http.Header) (*MachineAccount, error) {
+	machineHash := h.Get("X-Machine-Account-Hash")
+	balanceRaw := h.Get("X-Machine-Account-Balance")
+	if machineHash == "" && balanceRaw == "" {
+		return nil, nil
+	}
+	balance, err := strconv.Atoi(balanceRaw)
+	if err != nil {
+		return nil, fmt.Errorf("机器账户余额头解析失败: %v", err)
+	}
+	return &MachineAccount{MachineHash: machineHash, Balance: balance}, nil
 }
 
 func firstErr(errs ...error) error {
